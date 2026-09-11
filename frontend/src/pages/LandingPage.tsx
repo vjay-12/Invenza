@@ -32,7 +32,7 @@ import { useTheme } from '../context/ThemeContext';
 import { PageMeta } from '../components/common/PageMeta';
 import { api } from '../services/api';
 import { Login } from './Login';
-import { INDUSTRIES_LIST } from '../data/platformConstants';
+import { INDUSTRIES_LIST, INDIAN_STATES_LIST } from '../data/platformConstants';
 import { HeroCarousel } from '../components/landing/HeroCarousel';
 
 // --- Sample Questions & Answers for AI Copilot Simulator ---
@@ -90,6 +90,9 @@ export const LandingPage: React.FC<{ onNavigate?: (tab: string) => void }> = ({ 
   const [companyCode, setCompanyCode] = useState('');
   const [industry, setIndustry] = useState(INDUSTRIES_LIST[0]);
   const [location, setLocation] = useState('');
+  const [state, setState] = useState('');
+  const [pincode, setPincode] = useState('');
+  const [pincodeError, setPincodeError] = useState<string | null>(null);
   const [contactName, setContactName] = useState('');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
@@ -474,10 +477,18 @@ export const LandingPage: React.FC<{ onNavigate?: (tab: string) => void }> = ({ 
 
   const handleLeadSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!companyName.trim() || !contactName.trim() || !email.trim() || !phone.trim() || !location.trim()) {
-      setSubmissionError('Please fill in all required company and contact fields.');
+    if (!companyName.trim() || !contactName.trim() || !email.trim() || !phone.trim() || !location.trim() || !state.trim() || !pincode.trim()) {
+      setSubmissionError('Please fill in all required company, location (City, State, Pincode), and contact fields.');
       return;
     }
+
+    const cleanPincode = pincode.trim();
+    if (!/^[1-9][0-9]{5}$/.test(cleanPincode)) {
+      setPincodeError('Pincode must be a valid 6-digit Indian postal code (e.g. 560001).');
+      setSubmissionError('Please enter a valid 6-digit Pincode.');
+      return;
+    }
+    setPincodeError(null);
 
     setIsSubmitting(true);
     setSubmissionError(null);
@@ -488,6 +499,8 @@ export const LandingPage: React.FC<{ onNavigate?: (tab: string) => void }> = ({ 
         company_code: companyCode.trim() || undefined,
         industry,
         location: location.trim(),
+        state: state.trim(),
+        pincode: cleanPincode,
         contact_name: contactName.trim(),
         email: email.trim().toLowerCase(),
         phone: phone.trim(),
@@ -2844,34 +2857,87 @@ export const LandingPage: React.FC<{ onNavigate?: (tab: string) => void }> = ({ 
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   <div>
                     <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                      Primary Operating City / State *
+                      City / Operating Location *
                     </label>
                     <input
                       type="text"
                       value={location}
                       onChange={(e) => setLocation(e.target.value)}
                       required
-                      placeholder="e.g. Bangalore, Karnataka"
-                      className="w-full px-3 py-2 rounded-xl bg-[#F6F8FA] dark:bg-[#0C1017] border border-slate-200 dark:border-[#1E2636] text-xs text-white placeholder:text-slate-600 focus:outline-none focus:border-teal-500 transition-colors"
+                      placeholder="e.g. Bengaluru"
+                      className="w-full px-3 py-2 rounded-xl bg-[#F6F8FA] dark:bg-[#0C1017] border border-slate-200 dark:border-[#1E2636] text-xs text-slate-900 dark:text-white placeholder:text-slate-500 focus:outline-none focus:border-teal-500 transition-colors"
                     />
                   </div>
 
                   <div>
                     <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                      Suggested Company Code (Optional)
+                      State (GST Classification) *
+                    </label>
+                    <select
+                      value={state}
+                      onChange={(e) => setState(e.target.value)}
+                      required
+                      className="w-full px-3 py-2 rounded-xl bg-[#F6F8FA] dark:bg-[#0C1017] border border-slate-200 dark:border-[#1E2636] text-xs text-slate-900 dark:text-white focus:outline-none focus:border-teal-500 transition-colors"
+                    >
+                      <option value="">Select State / UT...</option>
+                      {INDIAN_STATES_LIST.map((s) => (
+                        <option key={s.code} value={s.name}>
+                          {s.code} - {s.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                      Pincode (6 Digits) *
                     </label>
                     <input
                       type="text"
-                      value={companyCode}
-                      onChange={(e) => setCompanyCode(e.target.value.toUpperCase())}
-                      placeholder="e.g. APEXIND"
-                      maxLength={12}
-                      className="w-full px-3 py-2 rounded-xl bg-[#F6F8FA] dark:bg-[#0C1017] border border-slate-200 dark:border-[#1E2636] text-xs text-white placeholder:text-slate-600 focus:outline-none focus:border-teal-500 font-mono uppercase transition-colors"
+                      maxLength={6}
+                      value={pincode}
+                      onChange={(e) => {
+                        const val = e.target.value.replace(/\D/g, '').slice(0, 6);
+                        setPincode(val);
+                        if (val.length === 6) {
+                          if (/^[1-9][0-9]{5}$/.test(val)) {
+                            setPincodeError(null);
+                          } else {
+                            setPincodeError('Pincode cannot start with 0');
+                          }
+                        } else if (val.length > 0) {
+                          setPincodeError('Must be exactly 6 digits');
+                        } else {
+                          setPincodeError(null);
+                        }
+                      }}
+                      required
+                      placeholder="e.g. 560001"
+                      className={`w-full px-3 py-2 rounded-xl bg-[#F6F8FA] dark:bg-[#0C1017] border ${
+                        pincodeError ? 'border-rose-500' : 'border-slate-200 dark:border-[#1E2636]'
+                      } text-xs font-mono text-slate-900 dark:text-white placeholder:text-slate-500 focus:outline-none focus:border-teal-500 transition-colors`}
                     />
+                    {pincodeError && (
+                      <p className="text-[10px] text-rose-500 mt-1 font-sans">{pincodeError}</p>
+                    )}
                   </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    Suggested Company Code (Optional)
+                  </label>
+                  <input
+                    type="text"
+                    value={companyCode}
+                    onChange={(e) => setCompanyCode(e.target.value.toUpperCase())}
+                    placeholder="e.g. APEXIND"
+                    maxLength={12}
+                    className="w-full px-3 py-2 rounded-xl bg-[#F6F8FA] dark:bg-[#0C1017] border border-slate-200 dark:border-[#1E2636] text-xs text-slate-900 dark:text-white placeholder:text-slate-500 focus:outline-none focus:border-teal-500 font-mono uppercase transition-colors"
+                  />
                 </div>
 
                 <div className="border-t border-slate-200 dark:border-[#1E2636] pt-4 mt-4">

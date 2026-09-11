@@ -22,6 +22,7 @@ class TenantSettings(Base):
     registered_address = Column(Text, nullable=False, default="Plot 42, Tech Park Central, Outer Ring Road, Bengaluru, Karnataka 560103")
     state = Column(String(100), nullable=False, default="Karnataka")
     state_code = Column(String(2), nullable=False, default="29")
+    pincode = Column(String(10), nullable=True, default="560103")
     logo_url = Column(String(500), nullable=True)
     authorized_signatory_name = Column(String(255), nullable=False, default="Vijay B")
     signature_url = Column(String(500), nullable=True)

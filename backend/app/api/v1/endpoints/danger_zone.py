@@ -85,58 +85,13 @@ async def send_danger_zone_otp(
         else "PURGE MOVEMENT LEDGER (CRITICAL AUDIT ERASURE)"
     )
 
-    subject = f"SECURITY ALERT: Verification Code for Danger Zone Action ({action_label})"
-
-    body_text = f"""
-Dear {user_name},
-
-A request was initiated in the Invenza Danger Zone to execute:
-OPERATION: {action_label}
-REQUESTED AT: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}
-
-YOUR 6-DIGIT VERIFICATION CODE IS:
-{otp_code}
-
-This code expires in 10 minutes. 
-
-SECURITY NOTICE:
-Destructive actions cannot be undone. For Movement Ledger purges, Super Admin authorization will also be required after this code is verified. If you did not initiate this request, contact your security administrator immediately.
-
-Best regards,
-Invenza Security Safeguards Team
-    """
-
-    body_html = f"""
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <style>
-    body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #0B0F19; color: #F1F5F9; margin: 0; padding: 24px; }}
-    .box {{ max-width: 580px; margin: 0 auto; background-color: #1E293B; border-radius: 16px; border: 1px solid #E11D48; padding: 32px; }}
-    .badge {{ display: inline-block; background-color: #E11D4820; color: #FB7185; border: 1px solid #E11D4860; padding: 4px 10px; border-radius: 6px; font-weight: 700; font-size: 11px; text-transform: uppercase; }}
-    .otp {{ font-size: 32px; font-weight: 900; letter-spacing: 8px; color: #38BDF8; font-family: monospace; background: #0F172A; padding: 14px 20px; border-radius: 10px; text-align: center; margin: 20px 0; border: 1px solid #334155; }}
-  </style>
-</head>
-<body>
-  <div class="box">
-    <span class="badge">Danger Zone Multi-Step Verification</span>
-    <h2 style="color: #FFFFFF; margin-top: 12px;">Verification Code Required</h2>
-    <p style="color: #94A3B8; font-size: 13px;">You have requested to execute a permanent destructive operation: <strong style="color: #F43F5E;">{action_label}</strong>.</p>
-    <div class="otp">{otp_code}</div>
-    <p style="color: #94A3B8; font-size: 12px;">This verification code is valid for <strong>10 minutes</strong>. Never share this code with anyone.</p>
-  </div>
-</body>
-</html>
-    """
-
-    # Dispatch email asynchronously and log to email_outbox.log
-    await EmailService.send_email_async(
-        recipient=user_email,
-        subject=subject,
-        body_text=body_text,
-        body_html=body_html,
-        metadata={"action": req.action, "type": "danger_zone_otp"},
+    # Dispatch official destruction OTP email via centralized EmailService
+    await EmailService.send_destruction_otp_email(
+        operator_email=user_email,
+        action_name=req.action,
+        otp_code=otp_code,
+        operator_name=user_name,
+        ttl_minutes=10,
     )
 
     return {
@@ -347,32 +302,17 @@ async def request_ledger_purge(
     # Store request
     _ledger_purge_requests.insert(0, purge_request)
 
-    # Notify Super Admin via Email
+    # Notify Super Admin via official Compliance Safeguard email
     superadmin_email = os.getenv("SUPERADMIN_EMAIL", "superadmin@invenza.internal")
-    subject = f"URGENT APPROVAL REQUIRED: Movement Ledger Purge Request [{request_id}]"
-    body_text = f"""
-SUPER ADMINISTRATOR SECURITY NOTICE:
-
-A request has been verified to purge the Movement Ledger audit stream.
-REQUEST ID: {request_id}
-COMPANY: {company_name}
-REQUESTED BY: {operator_name} ({user_email})
-MFA VERIFICATION: Password + Email OTP Verified at {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}
-RECORDS AT RISK: {record_count} historical audit transactions
-REASON: {req.reason}
-
-STATUS: PENDING YOUR EXPLICIT AUTHORIZATION.
-The movement ledger has NOT been purged. You must review and approve this action in the Super Admin Console before any deletion executes.
-
-Invenza Enterprise Compliance Safeguards
-    """
-
-    await EmailService.send_email_async(
-        recipient=superadmin_email,
-        subject=subject,
-        body_text=body_text,
-        body_html=f"<p>{body_text.replace(chr(10), '<br>')}</p>",
-        metadata={"request_id": request_id, "type": "super_admin_approval_notice"},
+    await EmailService.send_security_safeguard_alert(
+        action_type="ledger_purge",
+        tenant_name=company_name,
+        requester_name=operator_name,
+        requester_email=user_email,
+        affected_scope=f"{record_count} historical audit transactions",
+        reason=req.reason,
+        request_id=request_id,
+        superadmin_email=superadmin_email,
     )
 
     return {

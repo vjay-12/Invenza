@@ -28,10 +28,15 @@ import {
 import { api } from '../services/api';
 import { PageMeta } from '../components/common/PageMeta';
 import { SimpleSelectDropdown, DropdownOption } from '../components/common/SimpleSelectDropdown';
-import { INDUSTRIES_LIST, AVAILABLE_MODULES } from '../data/platformConstants';
+import { INDUSTRIES_LIST, AVAILABLE_MODULES, INDIAN_STATES_LIST } from '../data/platformConstants';
 
 const LEAD_STATUS_CONFIG: Record<string, { label: string; color: string; dot: string }> = {
   new: {
+    label: 'New Inquiry',
+    color: 'bg-teal-100 text-teal-950 border-teal-300 dark:bg-teal-500/20 dark:text-teal-300 dark:border-teal-500/40',
+    dot: 'bg-teal-600 dark:bg-teal-400',
+  },
+  pending: {
     label: 'New Inquiry',
     color: 'bg-teal-100 text-teal-950 border-teal-300 dark:bg-teal-500/20 dark:text-teal-300 dark:border-teal-500/40',
     dot: 'bg-teal-600 dark:bg-teal-400',
@@ -120,6 +125,8 @@ export const LeadsManagement: React.FC<LeadsManagementProps> = ({ onNavigate }) 
   const [provCompanyCode, setProvCompanyCode] = useState('');
   const [provIndustry, setProvIndustry] = useState(INDUSTRIES_LIST[0]);
   const [provLocation, setProvLocation] = useState('');
+  const [provState, setProvState] = useState('');
+  const [provPincode, setProvPincode] = useState('');
   const [provCurrency, setProvCurrency] = useState('INR');
   const [provTier, setProvTier] = useState('Growth Suite');
   const [provQuotedSetupFee, setProvQuotedSetupFee] = useState('0');
@@ -171,6 +178,13 @@ export const LeadsManagement: React.FC<LeadsManagementProps> = ({ onNavigate }) 
 
   useEffect(() => {
     loadLeads();
+    const handleRefresh = () => loadLeads();
+    window.addEventListener('invenza_notifications_refresh', handleRefresh);
+    window.addEventListener('focus', handleRefresh);
+    return () => {
+      window.removeEventListener('invenza_notifications_refresh', handleRefresh);
+      window.removeEventListener('focus', handleRefresh);
+    };
   }, []);
 
   const generateRandomPassword = () => {
@@ -217,6 +231,8 @@ export const LeadsManagement: React.FC<LeadsManagementProps> = ({ onNavigate }) 
     setProvCompanyCode(cleanCode || 'COMP');
     setProvIndustry(INDUSTRIES_LIST.includes(lead.industry) ? lead.industry : INDUSTRIES_LIST[0]);
     setProvLocation(lead.location || 'Headquarters');
+    setProvState(lead.state || '');
+    setProvPincode(lead.pincode || '');
     setProvCurrency('INR');
     setProvTier(lead.tier_estimate || 'Growth Suite');
     setProvQuotedSetupFee(String(lead.quoted_amount || 0));
@@ -247,6 +263,8 @@ export const LeadsManagement: React.FC<LeadsManagementProps> = ({ onNavigate }) 
         unique_code: provCompanyCode.trim().toUpperCase() || undefined,
         industry: provIndustry,
         location: provLocation.trim() || 'Headquarters',
+        state: provState.trim() || undefined,
+        pincode: provPincode.trim() || undefined,
         currency_code: provCurrency,
         tier: provTier,
         tags: [provTier],
@@ -280,14 +298,20 @@ export const LeadsManagement: React.FC<LeadsManagementProps> = ({ onNavigate }) 
 
   // Metrics computation (100% dynamic)
   const totalCount = leads.length;
-  const newCount = leads.filter((l) => l.status === 'new').length;
+  const newCount = leads.filter((l) => l.status === 'new' || l.status === 'pending').length;
   const discussionCount = leads.filter((l) => l.status === 'in_discussion').length;
   const quotedCount = leads.filter((l) => l.status === 'quoted').length;
   const convertedCount = leads.filter((l) => l.status === 'converted').length;
   const lostCount = leads.filter((l) => l.status === 'rejected_lost').length;
 
   const filteredLeads = leads.filter((l) => {
-    if (statusFilter !== 'all' && l.status !== statusFilter) return false;
+    if (statusFilter !== 'all') {
+      if (statusFilter === 'new') {
+        if (l.status !== 'new' && l.status !== 'pending') return false;
+      } else if (l.status !== statusFilter) {
+        return false;
+      }
+    }
     if (searchTerm.trim()) {
       const term = searchTerm.toLowerCase();
       const matchComp = (l.company_name || '').toLowerCase().includes(term);
@@ -782,13 +806,49 @@ export const LeadsManagement: React.FC<LeadsManagementProps> = ({ onNavigate }) 
 
                 <div>
                   <label className="block text-slate-600 dark:text-slate-400 font-medium mb-1">
-                    Location / Headquarters
+                    Operating City / Location *
                   </label>
                   <input
                     type="text"
+                    required
                     value={provLocation}
                     onChange={(e) => setProvLocation(e.target.value)}
+                    placeholder="e.g. Bengaluru"
                     className="w-full px-3 py-2 rounded-lg bg-[#F8FAFC] dark:bg-[#0C1017] border border-slate-200 dark:border-slate-800 text-slate-900 dark:text-white focus:outline-none focus:border-teal-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-slate-600 dark:text-slate-400 font-medium mb-1">
+                    State (GST Classification) *
+                  </label>
+                  <select
+                    value={provState}
+                    onChange={(e) => setProvState(e.target.value)}
+                    required
+                    className="w-full px-3 py-2 rounded-lg bg-[#F8FAFC] dark:bg-[#0C1017] border border-slate-200 dark:border-slate-800 text-slate-900 dark:text-white focus:outline-none focus:border-teal-500"
+                  >
+                    <option value="">Select State / UT...</option>
+                    {INDIAN_STATES_LIST.map((s) => (
+                      <option key={s.code} value={s.name}>
+                        {s.code} - {s.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-slate-600 dark:text-slate-400 font-medium mb-1">
+                    Pincode (6 Digits) *
+                  </label>
+                  <input
+                    type="text"
+                    maxLength={6}
+                    required
+                    value={provPincode}
+                    onChange={(e) => setProvPincode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                    placeholder="e.g. 560001"
+                    className="w-full px-3 py-2 rounded-lg bg-[#F8FAFC] dark:bg-[#0C1017] border border-slate-200 dark:border-slate-800 text-slate-900 dark:text-white font-mono focus:outline-none focus:border-teal-500"
                   />
                 </div>
               </div>
@@ -1003,6 +1063,8 @@ export const LeadsManagement: React.FC<LeadsManagementProps> = ({ onNavigate }) 
                       <div className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wide">Primary Location / HQ</div>
                       <div className="text-xs font-bold text-slate-800 dark:text-slate-200 mt-0.5">
                         {selectedLeadForDetail.location || 'India'}
+                        {selectedLeadForDetail.state && `, ${selectedLeadForDetail.state}`}
+                        {selectedLeadForDetail.pincode && ` - ${selectedLeadForDetail.pincode}`}
                       </div>
                       <div className="text-[10px] text-slate-500 mt-0.5">Reported operational base</div>
                     </div>

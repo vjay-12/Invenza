@@ -13,6 +13,7 @@ from app.models.tenant import Tenant
 from app.models.ledger import StockMovement
 from app.models.security_request import SecurityApprovalRequest
 from app.models.audit_log import AuditLog
+from app.services.email_service import EmailService
 from app.schemas.security_request import (
     SecurityApprovalRequestResponse,
     SecurityApprovalRequestCreate,
@@ -83,6 +84,21 @@ async def create_security_request(
 
     await db.commit()
     await db.refresh(new_req)
+
+    # Dispatch Compliance Safeguard alert to Super Admin
+    try:
+        await EmailService.send_security_safeguard_alert(
+            action_type=req.action_type,
+            tenant_name=tenant.name,
+            requester_name=actor.full_name or "Administrator",
+            requester_email=actor.email,
+            affected_scope=f"Target: {req.target_name or str(req.target_id)}",
+            reason=req.reason,
+            request_id=str(new_req.id),
+        )
+    except Exception as e:
+        print(f"[Safeguard Alert Dispatch Error]: {e}")
+
     return new_req
 
 @router.post("/queue/{request_id}/approve", response_model=SecurityApprovalRequestResponse)

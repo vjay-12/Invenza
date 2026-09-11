@@ -10,6 +10,9 @@ import {
   IconArrowRight,
   IconX,
   IconMail,
+  IconMessageCircle,
+  IconShieldAlert,
+  IconShieldCheck,
 } from '../icons';
 import { useInventory } from '../../context/InventoryContext';
 import { useAuth } from '../../context/AuthContext';
@@ -45,8 +48,11 @@ export const NotificationDropdown: React.FC<NotificationDropdownProps> = ({
 }) => {
   const { products, ledger } = useInventory();
   const { user } = useAuth();
-  const isAdmin = user?.role === 'admin' || user?.role === 'super_admin';
+  const isSuperAdmin = user?.role === 'super_admin';
+  const isAdmin = user?.role === 'admin' || isSuperAdmin;
   const [emailChangeRequests, setEmailChangeRequests] = useState<any[]>([]);
+  const [leads, setLeads] = useState<any[]>([]);
+  const [securityRequests, setSecurityRequests] = useState<any[]>([]);
   const [activeFilter, setActiveFilter] = useState<'all' | 'alert' | 'order' | 'audit'>('all');
   const [readIds, setReadIds] = useState<string[]>(() => {
     try {
@@ -75,6 +81,20 @@ export const NotificationDropdown: React.FC<NotificationDropdownProps> = ({
     }
   }, [isAdmin]);
 
+  const fetchSuperAdminData = useCallback(async () => {
+    if (!isSuperAdmin) return;
+    try {
+      const [leadsData, secData] = await Promise.all([
+        api.getLeads(),
+        api.getSecurityRequests('pending').catch(() => []),
+      ]);
+      setLeads(Array.isArray(leadsData) ? leadsData : []);
+      setSecurityRequests(Array.isArray(secData) ? secData : []);
+    } catch (err) {
+      console.error('Failed to fetch superadmin notifications:', err);
+    }
+  }, [isSuperAdmin]);
+
   useEffect(() => {
     if (!isAdmin) {
       setEmailChangeRequests([]);
@@ -93,6 +113,26 @@ export const NotificationDropdown: React.FC<NotificationDropdownProps> = ({
       clearInterval(interval);
     };
   }, [isAdmin, fetchEmailRequests]);
+
+  useEffect(() => {
+    if (!isSuperAdmin) {
+      setLeads([]);
+      setSecurityRequests([]);
+      return;
+    }
+    fetchSuperAdminData();
+
+    const handleRefresh = () => fetchSuperAdminData();
+    window.addEventListener('invenza_notifications_refresh', handleRefresh);
+    window.addEventListener('focus', handleRefresh);
+
+    const interval = setInterval(fetchSuperAdminData, 15000);
+    return () => {
+      window.removeEventListener('invenza_notifications_refresh', handleRefresh);
+      window.removeEventListener('focus', handleRefresh);
+      clearInterval(interval);
+    };
+  }, [isSuperAdmin, fetchSuperAdminData]);
 
   // Save read state to local cache
   const markAsRead = (id: string) => {
@@ -132,11 +172,70 @@ export const NotificationDropdown: React.FC<NotificationDropdownProps> = ({
     }
   };
 
-  // Dynamically derive real-time notifications from live products and ledger
+  // Dynamically derive real-time notifications from live products, ledger, quotes & safeguards
   const notifications: NotificationItem[] = useMemo(() => {
     const items: NotificationItem[] = [];
 
-    // 0. Pending Team Member Email Change Requests (Admin Only)
+    // 0. Super Admin: Pre-Sales Leads & Quotation Inquiries + Security Safeguards
+    if (isSuperAdmin) {
+      leads.forEach((lead) => {
+        const isNew = lead.status === 'new' || lead.status === 'pending';
+        const isInDiscussion = lead.status === 'in_discussion';
+        const isQuoted = lead.status === 'quoted';
+
+        if (isNew) {
+          items.push({
+            id: `lead-inquiry-${lead.id}`,
+            type: 'order',
+            severity: 'info',
+            title: `New Quote: ${lead.company_name}`,
+            message: `${lead.contact_name} requested quotation for ${lead.tier_estimate || 'Growth Suite'} • ${lead.location || 'Headquarters'}${lead.notes ? ` • Note: ${lead.notes}` : ''}`,
+            timestamp: lead.created_at,
+            tab: 'leads',
+            actionLabel: 'Review Quote Inquiry',
+          });
+        } else if (isInDiscussion) {
+          items.push({
+            id: `lead-discussion-${lead.id}`,
+            type: 'order',
+            severity: 'warning',
+            title: `In Discussion: ${lead.company_name}`,
+            message: `${lead.contact_name} • Scope: ${lead.tier_estimate || 'Growth Suite'}${lead.notes ? ` • Note: ${lead.notes}` : ''}`,
+            timestamp: lead.updated_at || lead.created_at,
+            tab: 'leads',
+            actionLabel: 'View Pre-Sales Pipeline',
+          });
+        } else if (isQuoted) {
+          items.push({
+            id: `lead-quoted-${lead.id}`,
+            type: 'order',
+            severity: 'success',
+            title: `Quoted: ${lead.company_name}`,
+            message: `${lead.contact_name} • Quoted: ₹${Number(lead.quoted_amount || 0).toLocaleString('en-IN')} (${lead.tier_estimate || 'Growth Suite'})`,
+            timestamp: lead.updated_at || lead.created_at,
+            tab: 'leads',
+            actionLabel: 'Convert to Tenant',
+          });
+        }
+      });
+
+      securityRequests.forEach((req) => {
+        if (req.status === 'pending') {
+          items.push({
+            id: `safeguard-approval-${req.id}`,
+            type: 'alert',
+            severity: 'danger',
+            title: `Safeguard: ${(req.action_type || 'Action').replace(/_/g, ' ').toUpperCase()}`,
+            message: `${req.tenant_name || 'Tenant'}: ${req.reason || 'Dual-authorization approval required.'}`,
+            timestamp: req.created_at,
+            tab: 'safeguards',
+            actionLabel: 'Review Safeguard Queue',
+          });
+        }
+      });
+    }
+
+    // 1. Pending Team Member Email Change Requests (Admin Only)
     if (isAdmin && emailChangeRequests.length > 0) {
       emailChangeRequests.forEach((req) => {
         items.push({
@@ -152,74 +251,79 @@ export const NotificationDropdown: React.FC<NotificationDropdownProps> = ({
       });
     }
 
-    // 1. Critical Low Stock Alerts from active products
-    const lowStockProducts = products.filter((p) => p.currentStock <= p.reorderPoint);
-    lowStockProducts.forEach((p) => {
-      items.push({
-        id: `low-stock-${p.id}`,
-        type: 'alert',
-        severity: 'warning',
-        title: `Low Stock: ${p.name}`,
-        message: `${p.currentStock} ${p.unitOfMeasure} remaining in stock (Reorder threshold: ${p.reorderPoint})`,
-        timestamp: new Date().toISOString(),
-        tab: 'products',
-        actionLabel: 'Restock SKU',
-      });
-    });
-
-    // 2. Recent Dispatches, Inbound Receipts, and Audit Movements from Ledger
-    const recentLedger = ledger.slice(0, 15);
-    recentLedger.forEach((m) => {
-      if (m.reasonCode === 'product removed') {
+    // 2. Critical Low Stock Alerts from active products
+    if (!isSuperAdmin) {
+      const lowStockProducts = products.filter((p) => p.currentStock <= p.reorderPoint);
+      lowStockProducts.forEach((p) => {
         items.push({
-          id: `audit-del-${m.id}`,
-          type: 'audit',
-          severity: 'danger',
-          title: `Product Removed: ${m.productName}`,
-          message: `Audit reference ${m.referenceId} logged by ${m.performedBy || 'Operator'}`,
-          timestamp: m.timestamp,
-          tab: 'ledger',
-          actionLabel: 'View Audit Trail',
-        });
-      } else if (m.movementType === 'IN') {
-        items.push({
-          id: `inbound-${m.id}`,
-          type: 'order',
-          severity: 'success',
-          title: `Stock Received: ${m.productName}`,
-          message: `+${Math.abs(m.quantity)} units received at ${m.locationName} (${m.referenceId})`,
-          timestamp: m.timestamp,
-          tab: 'purchase_orders',
-          actionLabel: 'View Purchase Order',
-        });
-      } else if (m.movementType === 'OUT') {
-        items.push({
-          id: `outbound-${m.id}`,
-          type: 'order',
-          severity: 'info',
-          title: `Order Dispatched: ${m.productName}`,
-          message: `-${Math.abs(m.quantity)} units dispatched (${m.referenceId})`,
-          timestamp: m.timestamp,
-          tab: 'sales_orders',
-          actionLabel: 'View Sales Order',
-        });
-      } else if (m.movementType === 'ADJUST') {
-        items.push({
-          id: `adjust-${m.id}`,
-          type: 'audit',
+          id: `low-stock-${p.id}`,
+          type: 'alert',
           severity: 'warning',
-          title: `Stock Adjusted: ${m.productName}`,
-          message: `Delta: ${m.quantity > 0 ? '+' : ''}${m.quantity} • Reason: ${m.reasonCode || 'Manual count'}`,
-          timestamp: m.timestamp,
-          tab: 'adjustments',
-          actionLabel: 'View Adjustment',
+          title: `Low Stock: ${p.name}`,
+          message: `${p.currentStock} ${p.unitOfMeasure} remaining in stock (Reorder threshold: ${p.reorderPoint})`,
+          timestamp: new Date().toISOString(),
+          tab: 'products',
+          actionLabel: 'Restock SKU',
         });
-      }
-    });
+      });
+
+      // 3. Recent Dispatches, Inbound Receipts, and Audit Movements from Ledger
+      const recentLedger = ledger.slice(0, 15);
+      recentLedger.forEach((m) => {
+        if (m.reasonCode === 'product removed') {
+          items.push({
+            id: `audit-del-${m.id}`,
+            type: 'audit',
+            severity: 'danger',
+            title: `Product Removed: ${m.productName}`,
+            message: `Audit reference ${m.referenceId} logged by ${m.performedBy || 'Operator'}`,
+            timestamp: m.timestamp,
+            tab: 'ledger',
+            actionLabel: 'View Audit Trail',
+          });
+        } else if (m.movementType === 'IN') {
+          items.push({
+            id: `inbound-${m.id}`,
+            type: 'order',
+            severity: 'success',
+            title: `Stock Received: ${m.productName}`,
+            message: `+${Math.abs(m.quantity)} units received at ${m.locationName} (${m.referenceId})`,
+            timestamp: m.timestamp,
+            tab: 'purchase_orders',
+            actionLabel: 'View Purchase Order',
+          });
+        } else if (m.movementType === 'OUT') {
+          items.push({
+            id: `outbound-${m.id}`,
+            type: 'order',
+            severity: 'info',
+            title: `Order Dispatched: ${m.productName}`,
+            message: `-${Math.abs(m.quantity)} units dispatched (${m.referenceId})`,
+            timestamp: m.timestamp,
+            tab: 'sales_orders',
+            actionLabel: 'View Sales Order',
+          });
+        } else if (m.movementType === 'ADJUST') {
+          items.push({
+            id: `adjust-${m.id}`,
+            type: 'audit',
+            severity: 'warning',
+            title: `Stock Adjusted: ${m.productName}`,
+            message: `Delta: ${m.quantity > 0 ? '+' : ''}${m.quantity} • Reason: ${m.reasonCode || 'Manual count'}`,
+            timestamp: m.timestamp,
+            tab: 'adjustments',
+            actionLabel: 'View Adjustment',
+          });
+        }
+      });
+    }
+
+    // Sort items newest first
+    items.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
 
     // Filter out user-cleared notifications
     return items.filter((item) => !clearedIds.includes(item.id));
-  }, [isAdmin, emailChangeRequests, products, ledger, clearedIds]);
+  }, [isSuperAdmin, leads, securityRequests, isAdmin, emailChangeRequests, products, ledger, clearedIds]);
 
   // Compute unread count and notify parent for bell badge
   const unreadCount = useMemo(() => {
@@ -309,8 +413,8 @@ export const NotificationDropdown: React.FC<NotificationDropdownProps> = ({
         {(
           [
             { id: 'all', label: 'All' },
-            { id: 'alert', label: 'Alerts' },
-            { id: 'order', label: 'Orders' },
+            { id: 'alert', label: isSuperAdmin ? 'Safeguards' : 'Alerts' },
+            { id: 'order', label: isSuperAdmin ? 'Quotes' : 'Orders' },
             { id: 'audit', label: 'Audit' },
           ] as const
         ).map((f) => {
@@ -376,7 +480,11 @@ export const NotificationDropdown: React.FC<NotificationDropdownProps> = ({
                       : 'bg-teal-50 dark:bg-teal-500/10 border-teal-200 dark:border-teal-500/25 text-teal-700 dark:text-teal-400'
                   }`}
                 >
-                  {item.tab === 'team' ? (
+                  {item.tab === 'leads' ? (
+                    <IconMessageCircle className="h-3.5 w-3.5" />
+                  ) : item.tab === 'safeguards' ? (
+                    <IconShieldAlert className="h-3.5 w-3.5" />
+                  ) : item.tab === 'team' ? (
                     <IconMail className="h-3.5 w-3.5" />
                   ) : (
                     <>
@@ -434,12 +542,12 @@ export const NotificationDropdown: React.FC<NotificationDropdownProps> = ({
         <button
           type="button"
           onClick={() => {
-            if (onNavigate) onNavigate('ledger');
+            if (onNavigate) onNavigate(isSuperAdmin ? 'leads' : 'ledger');
             onClose();
           }}
           className="text-[11px] font-bold text-slate-600 dark:text-slate-400 hover:text-teal-600 dark:hover:text-teal-400 transition-colors"
         >
-          View Audit Ledger →
+          {isSuperAdmin ? 'View Pre-Sales Pipeline →' : 'View Audit Ledger →'}
         </button>
 
         {notifications.length > 0 && (

@@ -38,7 +38,7 @@ import {
 import { api } from '../services/api';
 import { PageMeta } from '../components/common/PageMeta';
 import { SimpleSelectDropdown, DropdownOption } from '../components/common/SimpleSelectDropdown';
-import { INDUSTRIES_LIST, AVAILABLE_MODULES } from '../data/platformConstants';
+import { INDUSTRIES_LIST, AVAILABLE_MODULES, INDIAN_STATES_LIST } from '../data/platformConstants';
 export { INDUSTRIES_LIST, AVAILABLE_MODULES };
 
 export const SuperAdminConsole: React.FC<{
@@ -83,6 +83,8 @@ export const SuperAdminConsole: React.FC<{
   const [provCompanyCode, setProvCompanyCode] = useState('');
   const [provIndustry, setProvIndustry] = useState(INDUSTRIES_LIST[0]);
   const [provLocation, setProvLocation] = useState('');
+  const [provState, setProvState] = useState('');
+  const [provPincode, setProvPincode] = useState('');
   const [provCurrency, setProvCurrency] = useState('INR');
   const [provSetupFee, setProvSetupFee] = useState('25000');
   const [provMonthlyRate, setProvMonthlyRate] = useState('4500');
@@ -250,8 +252,10 @@ export const SuperAdminConsole: React.FC<{
     setActiveLeadForProvisioning(lead);
     setProvCompanyName(lead.company_name || '');
     setProvCompanyCode(lead.company_code || '');
-    setProvIndustry(lead.industry || INDUSTRIES_LIST[0]);
+    setProvIndustry(INDUSTRIES_LIST.includes(lead.industry) ? lead.industry : INDUSTRIES_LIST[0]);
     setProvLocation(lead.location || 'Headquarters');
+    setProvState(lead.state || '');
+    setProvPincode(lead.pincode || '');
     setProvCurrency('INR');
     setProvSetupFee(lead.quoted_amount ? String(lead.quoted_amount) : '25000');
     setProvMonthlyRate('4500');
@@ -301,6 +305,8 @@ export const SuperAdminConsole: React.FC<{
         unique_code: provCompanyCode.trim() || undefined,
         industry: provIndustry,
         location: provLocation.trim() || 'Headquarters',
+        state: provState.trim() || undefined,
+        pincode: provPincode.trim() || undefined,
         currency_code: provCurrency,
         setup_fee: setupFeeNum,
         monthly_maintenance_fee: monthlyRateNum,
@@ -338,6 +344,8 @@ export const SuperAdminConsole: React.FC<{
     setProvCompanyCode('');
     setProvIndustry(INDUSTRIES_LIST[0]);
     setProvLocation('');
+    setProvState('');
+    setProvPincode('');
     setProvCurrency('INR');
     setProvSetupFee('25000');
     setProvMonthlyRate('4500');
@@ -929,13 +937,41 @@ export const SuperAdminConsole: React.FC<{
                     </div>
 
                     <div>
-                      <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">HQ / Facility Location</label>
+                      <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">HQ / City Location *</label>
                       <input
                         type="text"
-                        placeholder="e.g. Chicago, IL, USA"
+                        placeholder="e.g. Bengaluru"
                         value={provLocation}
                         onChange={(e) => setProvLocation(e.target.value)}
                         className="w-full px-3.5 py-2 rounded-xl bg-[#F4F5F8] dark:bg-[#0C1017] border border-slate-200 dark:border-slate-800 text-xs text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">State (GST Invoicing) *</label>
+                      <select
+                        value={provState}
+                        onChange={(e) => setProvState(e.target.value)}
+                        className="w-full px-3.5 py-2 rounded-xl bg-[#F4F5F8] dark:bg-[#0C1017] border border-slate-200 dark:border-slate-800 text-xs text-slate-900 dark:text-white focus:outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500"
+                      >
+                        <option value="">Select State / UT...</option>
+                        {INDIAN_STATES_LIST.map((s) => (
+                          <option key={s.code} value={s.name}>
+                            {s.code} - {s.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">Postal Pincode (6 digits) *</label>
+                      <input
+                        type="text"
+                        maxLength={6}
+                        placeholder="e.g. 560001"
+                        value={provPincode}
+                        onChange={(e) => setProvPincode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                        className="w-full px-3.5 py-2 rounded-xl bg-[#F4F5F8] dark:bg-[#0C1017] border border-slate-200 dark:border-slate-800 text-xs text-slate-900 dark:text-white font-mono placeholder:text-slate-400 focus:outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500"
                       />
                     </div>
 
@@ -1248,6 +1284,8 @@ export const SuperAdminConsole: React.FC<{
                       <div className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wide">Primary Location / HQ</div>
                       <div className="text-xs font-bold text-slate-800 dark:text-slate-200 mt-0.5">
                         {selectedCompanyForDetail.location || 'Headquarters'}
+                        {selectedCompanyForDetail.state && `, ${selectedCompanyForDetail.state}`}
+                        {selectedCompanyForDetail.pincode && ` - ${selectedCompanyForDetail.pincode}`}
                       </div>
                       <div className="text-[10px] text-slate-500 mt-0.5">Primary registered business jurisdiction</div>
                     </div>

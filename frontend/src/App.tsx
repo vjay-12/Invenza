@@ -86,7 +86,8 @@ const NotFound = React.lazy(() =>
 );
 
 const pathToTab: Record<string, TabType | '404'> = {
-  '/': 'dashboard',
+  '/': 'home',
+  '/home': 'home',
   '/dashboard': 'dashboard',
   '/products': 'products',
   '/ledger': 'ledger',
@@ -110,6 +111,7 @@ const pathToTab: Record<string, TabType | '404'> = {
 };
 
 const tabToPath: Record<string, string> = {
+  home: '/home',
   dashboard: '/dashboard',
   products: '/products',
   ledger: '/ledger',
@@ -214,7 +216,7 @@ const AppContent: React.FC = () => {
 
   // Initialize currentTab from browser location pathname
   const initialPath = window.location.pathname.toLowerCase().replace(/\/$/, '') || '/';
-  const resolvedTab = pathToTab[initialPath] || (initialPath === '' ? 'dashboard' : '404');
+  const resolvedTab = pathToTab[initialPath] || (initialPath === '' ? 'home' : '404');
 
   const [currentTab, setCurrentTab] = useState<TabType | '404'>(resolvedTab);
   const [currentParams, setCurrentParams] = useState<Record<string, string>>(() => {
@@ -260,16 +262,24 @@ const AppContent: React.FC = () => {
     return () => window.removeEventListener('popstate', handlePopState);
   }, []);
 
-  // Sync tab with user role upon login
+  // Sync tab with user role upon login / logout
   useEffect(() => {
     if (isAuthenticated) {
-      if (isSuperAdmin && currentTab === 'dashboard') {
+      if (isSuperAdmin && (currentTab === 'home' || currentTab === 'dashboard')) {
         navigateTo('companies');
-      } else if (!isSuperAdmin && currentTab === 'companies') {
+      } else if (!isSuperAdmin && (currentTab === 'home' || currentTab === 'companies')) {
         navigateTo('dashboard');
       }
+    } else if (!isLoading) {
+      // For unauthenticated visitors, ensure URL path is cleanly /home (or /terms, /privacy)
+      const publicPaths = ['/home', '/terms', '/privacy'];
+      const path = window.location.pathname.toLowerCase().replace(/\/$/, '') || '/';
+      if (!publicPaths.includes(path)) {
+        window.history.replaceState({ tab: 'home' }, '', '/home');
+        setCurrentTab('home');
+      }
     }
-  }, [isAuthenticated, isSuperAdmin]);
+  }, [isAuthenticated, isSuperAdmin, isLoading, currentTab]);
 
   // Global keyboard shortcut for Command Palette (Ctrl/Cmd + K)
   useEffect(() => {
@@ -325,6 +335,8 @@ const AppContent: React.FC = () => {
 
   const renderCurrentPage = () => {
     switch (currentTab) {
+      case 'home':
+        return <LandingPage onNavigate={(t) => navigateTo(t as any)} />;
       case 'companies':
         return (
           <Suspense fallback={<DashboardSkeleton />}>

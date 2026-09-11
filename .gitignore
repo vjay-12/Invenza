@@ -49,6 +49,8 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 backend/email_outbox.log
+scratch/
+backend/scratch/
 
 # Build Outputs
 dist/

@@ -128,10 +128,12 @@ async def migrate_columns():
             except Exception as e:
                 print(f"[Schema Migration Warning - customers]: {e}")
 
-        # Alter tenants for tier & tags
+        # Alter tenants for tier, tags, state & pincode
         alter_tenants_v2 = [
             "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS tier VARCHAR(100) DEFAULT 'Growth Suite';",
             "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS tags JSONB DEFAULT '[]'::jsonb;",
+            "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS state VARCHAR(100);",
+            "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS pincode VARCHAR(10);",
         ]
         for stmt in alter_tenants_v2:
             try:
@@ -139,16 +141,24 @@ async def migrate_columns():
             except Exception as e:
                 print(f"[Schema Migration Warning - tenants v2]: {e}")
 
-        # Alter lead_inquiries for quoted_amount & converted_tenant_id
+        # Alter lead_inquiries for quoted_amount, converted_tenant_id, state & pincode
         alter_leads = [
             "ALTER TABLE lead_inquiries ADD COLUMN IF NOT EXISTS quoted_amount NUMERIC(12,2) DEFAULT 0.00;",
             "ALTER TABLE lead_inquiries ADD COLUMN IF NOT EXISTS converted_tenant_id UUID;",
+            "ALTER TABLE lead_inquiries ADD COLUMN IF NOT EXISTS state VARCHAR(100);",
+            "ALTER TABLE lead_inquiries ADD COLUMN IF NOT EXISTS pincode VARCHAR(10);",
         ]
         for stmt in alter_leads:
             try:
                 await conn.execute(text(stmt))
             except Exception as e:
                 print(f"[Schema Migration Warning - lead_inquiries]: {e}")
+
+        # Alter tenant_settings for pincode
+        try:
+            await conn.execute(text("ALTER TABLE tenant_settings ADD COLUMN IF NOT EXISTS pincode VARCHAR(10) DEFAULT '560103';"))
+        except Exception as e:
+            print(f"[Schema Migration Warning - tenant_settings pincode]: {e}")
 
         # Alter billing_payment_records for GST tax and sequential invoice fields
         alter_billing_payments = [

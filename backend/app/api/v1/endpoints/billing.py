@@ -23,6 +23,7 @@ from app.models.audit_log import AuditLog
 from app.models.invoice import TenantSettings, TenantInvoiceSequence, Invoice, InvoiceItem, InvoiceStatus
 from app.services.gst_service import GSTService, amount_to_indian_words
 from app.services.invoice_pdf_generator import InvoicePdfGenerator
+from app.services.email_service import EmailService
 from app.schemas.billing import (
     BillingOverviewResponse,
     BillingOrgSummary,
@@ -110,14 +111,22 @@ async def compute_tenant_billing_tax(
     buyer_name = (tenant_sett.legal_business_name if tenant_sett and tenant_sett.legal_business_name else tenant_name)
     raw_gstin = tenant_sett.gstin if tenant_sett and tenant_sett.gstin else "URP"
     buyer_gstin = raw_gstin.strip()[:15]
-    buyer_raw_state = tenant_sett.state if tenant_sett and tenant_sett.state else (tenant.location if tenant else "Karnataka")
+    buyer_raw_state = (
+        (tenant_sett.state if tenant_sett and tenant_sett.state else None)
+        or (tenant.state if tenant and tenant.state else None)
+        or (tenant.location if tenant else "Karnataka")
+    )
     buyer_code, buyer_state = GSTService.normalize_state_code(buyer_raw_state)
     if not buyer_code:
         buyer_code, buyer_state = "29", "Karnataka"
     buyer_address = (
         tenant_sett.registered_address
         if tenant_sett and tenant_sett.registered_address
-        else (tenant.location if tenant else "Registered Business Address")
+        else (
+            f"{tenant.location}, {buyer_state} - {tenant.pincode}"
+            if tenant and tenant.pincode and tenant.location
+            else (tenant.location if tenant else "Registered Business Address")
+        )
     )
 
     # 3. Calculate GST (SAC 998313 for IT Software & SaaS Services)
@@ -928,6 +937,33 @@ async def mark_setup_fee_paid(
 
     await db.commit()
     await db.refresh(setup_fee)
+
+    # Dispatch official GST Tax Invoice & payment receipt email
+    try:
+        admin_user_res = await db.execute(
+            select(User).where(and_(User.tenant_id == setup_fee.org_id, User.role.in_(["admin", "super_admin"])))
+        )
+        admin_user = admin_user_res.scalars().first()
+        rcpt_email = admin_user.email if admin_user else admin.email
+        rcpt_name = admin_user.full_name if admin_user else tenant_name
+
+        await EmailService.send_billing_receipt_email(
+            recipient_email=rcpt_email,
+            recipient_name=rcpt_name,
+            company_name=tenant_name,
+            invoice_number=inv_num,
+            payment_mode=req.payment_mode,
+            taxable_value=float(inv.total_taxable_value or 0.0),
+            cgst=float(inv.total_cgst or 0.0),
+            sgst=float(inv.total_sgst or 0.0),
+            igst=float(inv.total_igst or 0.0),
+            grand_total=float(inv.grand_total or 0.0),
+            place_of_supply=inv.place_of_supply or "India",
+            invoice_id=str(setup_fee.id),
+        )
+    except Exception as e:
+        print(f"[Billing Email Warning]: Failed to dispatch setup fee invoice receipt: {e}")
+
     return {
         "success": True,
         "message": f"Setup fee marked as Paid. Invoice {inv_num} generated.",
@@ -940,6 +976,7 @@ async def mark_setup_fee_paid(
             "igst": float(inv.total_igst or 0.0),
             "total": float(inv.grand_total or 0.0),
             "is_inter_state": bool(inv.is_inter_state),
+            "place_of_supply": inv.place_of_supply,
         },
     }
 
@@ -1036,6 +1073,33 @@ async def mark_cycle_paid(
 
     await db.commit()
     await db.refresh(cycle)
+
+    # Dispatch official GST Tax Invoice & payment receipt email
+    try:
+        admin_user_res = await db.execute(
+            select(User).where(and_(User.tenant_id == cycle.org_id, User.role.in_(["admin", "super_admin"])))
+        )
+        admin_user = admin_user_res.scalars().first()
+        rcpt_email = admin_user.email if admin_user else admin.email
+        rcpt_name = admin_user.full_name if admin_user else tenant_name
+
+        await EmailService.send_billing_receipt_email(
+            recipient_email=rcpt_email,
+            recipient_name=rcpt_name,
+            company_name=tenant_name,
+            invoice_number=inv_num,
+            payment_mode=req.payment_mode,
+            taxable_value=float(inv.total_taxable_value or 0.0),
+            cgst=float(inv.total_cgst or 0.0),
+            sgst=float(inv.total_sgst or 0.0),
+            igst=float(inv.total_igst or 0.0),
+            grand_total=float(inv.grand_total or 0.0),
+            place_of_supply=inv.place_of_supply or "India",
+            invoice_id=str(cycle.id),
+        )
+    except Exception as e:
+        print(f"[Billing Email Warning]: Failed to dispatch cycle invoice receipt: {e}")
+
     return {
         "success": True,
         "message": f"Cycle {cycle.cycle_month} marked as Paid. Invoice {inv_num} generated.",
@@ -1048,6 +1112,7 @@ async def mark_cycle_paid(
             "igst": float(inv.total_igst or 0.0),
             "total": float(inv.grand_total or 0.0),
             "is_inter_state": bool(inv.is_inter_state),
+            "place_of_supply": inv.place_of_supply,
         },
     }
 

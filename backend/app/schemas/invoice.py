@@ -69,6 +69,7 @@ class TenantSettingsResponse(BaseModel):
     registered_address: str
     state: str
     state_code: str
+    pincode: Optional[str] = None
     logo_url: Optional[str] = None
     authorized_signatory_name: str
     signature_url: Optional[str] = None
@@ -90,6 +91,7 @@ class TenantSettingsUpdate(BaseModel):
     registered_address: Optional[str] = None
     state: Optional[str] = None
     state_code: Optional[str] = None
+    pincode: Optional[str] = None
     logo_url: Optional[str] = None
     authorized_signatory_name: Optional[str] = None
     signature_url: Optional[str] = None

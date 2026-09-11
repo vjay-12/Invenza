@@ -673,8 +673,19 @@ async def download_sales_order_pdf(
         items_res = await db.execute(select(SalesOrderItem).where(SalesOrderItem.order_id == so.id))
         items = items_res.scalars().all()
 
-        calc_items = []
-        subtotal = 0.0
+        seller_code = sett.state_code if sett and sett.state_code else "29"
+        pos_code, pos_name = GSTService.resolve_place_of_supply(
+            billing_state=so.billing_address,
+            billing_state_code=so.state_code,
+            shipping_state=so.shipping_address,
+            customer_gstin=so.customer_gstin,
+            legacy_state=so.state,
+            legacy_state_code=so.state_code,
+        )
+        if not pos_code:
+            pos_code, pos_name = "29", "Karnataka"
+
+        raw_items = []
         for it in items:
             p_res = await db.execute(select(Product).where(Product.id == it.product_id))
             prod = p_res.scalar_one_or_none()
@@ -682,25 +693,17 @@ async def download_sales_order_pdf(
             hsn = prod.hsn_code if prod and prod.hsn_code else "8471"
             qty = float(it.ordered_qty)
             price = float(it.unit_price)
-            item_tot = qty * price
-            subtotal += item_tot
-            calc_items.append({
+            raw_items.append({
                 "item_description": p_name,
                 "hsn_code": hsn,
                 "quantity": qty,
                 "unit_of_measure": prod.unit_of_measure if prod else "pcs",
                 "unit_price": price,
                 "discount": 0.0,
-                "taxable_value": item_tot,
                 "gst_rate": float(prod.gst_rate) if prod and prod.gst_rate else 18.0,
-                "cgst_rate": 9.0,
-                "cgst_amount": item_tot * 0.09,
-                "sgst_rate": 9.0,
-                "sgst_amount": item_tot * 0.09,
-                "igst_rate": 0.0,
-                "igst_amount": 0.0,
-                "total": item_tot * 1.18,
             })
+
+        tax_calc = GSTService.calculate_invoice_taxes(seller_code, pos_code, raw_items)
 
         order_dict = {
             "document_title": "SALES ORDER CONFIRMATION",
@@ -709,7 +712,7 @@ async def download_sales_order_pdf(
             "invoice_number": so.so_number,
             "invoice_date": so.order_date.isoformat() if so.order_date else datetime.utcnow().isoformat(),
             "due_date": so.order_date.isoformat() if so.order_date else datetime.utcnow().isoformat(),
-            "place_of_supply": f"{so.state_code or '29'}-{so.state or 'Karnataka'}",
+            "place_of_supply": tax_calc["place_of_supply"],
             "status": so.status.value if hasattr(so.status, "value") else str(so.status),
             "seller_legal_name": sett.legal_business_name if sett else (tenant.name if tenant else "Invenza"),
             "seller_gstin": sett.gstin if sett and sett.gstin else "29AABCI1234F1Z5",
@@ -721,17 +724,18 @@ async def download_sales_order_pdf(
             "customer_gstin": so.customer_gstin or "B2C / Unregistered",
             "customer_billing_address": so.billing_address or "Customer Address",
             "customer_shipping_address": so.shipping_address or so.billing_address or "Delivery Address",
-            "customer_state": so.state or "Karnataka",
-            "customer_state_code": so.state_code or "29",
-            "is_inter_state": False,
+            "customer_state": tax_calc["customer_state"],
+            "customer_state_code": tax_calc["customer_state_code"],
+            "is_inter_state": tax_calc["is_inter_state"],
             "payment_terms": "Standard Net 30",
-            "total_taxable_value": subtotal,
-            "total_cgst": subtotal * 0.09,
-            "total_sgst": subtotal * 0.09,
-            "total_igst": 0.0,
-            "round_off": 0.0,
-            "grand_total": subtotal * 1.18,
-            "grand_total_words": "Sales Order Confirmation Slip",
+            "items": tax_calc["items"],
+            "total_taxable_value": tax_calc["total_taxable_value"],
+            "total_cgst": tax_calc["total_cgst"],
+            "total_sgst": tax_calc["total_sgst"],
+            "total_igst": tax_calc["total_igst"],
+            "round_off": tax_calc["round_off"],
+            "grand_total": tax_calc["grand_total"],
+            "grand_total_words": tax_calc["grand_total_words"],
             "so_number": so.so_number,
             "bank_name": sett.bank_name if sett else "HDFC Bank",
             "bank_account_number": sett.bank_account_number if sett else "50200012345678",

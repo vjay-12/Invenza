@@ -23,6 +23,7 @@ import { useAuth } from '../../context/AuthContext';
 import { api } from '../../services/api';
 
 export type TabType =
+  | 'home'
   | 'dashboard'
   | 'companies'
   | 'leads'
@@ -82,8 +83,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
         }
       };
       fetchBadges();
+      const handleRefresh = () => fetchBadges();
+      window.addEventListener('invenza_notifications_refresh', handleRefresh);
+      window.addEventListener('focus', handleRefresh);
       const interval = setInterval(fetchBadges, 15000);
-      return () => clearInterval(interval);
+      return () => {
+        window.removeEventListener('invenza_notifications_refresh', handleRefresh);
+        window.removeEventListener('focus', handleRefresh);
+        clearInterval(interval);
+      };
     }
   }, [isSuperAdmin]);
 

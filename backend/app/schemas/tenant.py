@@ -9,6 +9,8 @@ class CompanyCreate(BaseModel):
     unique_code: Optional[str] = Field(None, max_length=50)
     industry: str = Field("General Merchandise", min_length=2, max_length=100)
     location: str = Field("Headquarters", min_length=2, max_length=255)
+    state: Optional[str] = Field(None, max_length=100)
+    pincode: Optional[str] = Field(None, max_length=10)
     currency_code: str = Field("INR", min_length=3, max_length=10)
     tier: Optional[str] = Field("Growth Suite", max_length=100)
     tags: Optional[List[str]] = Field(default_factory=list)
@@ -39,6 +41,8 @@ class CompanyUpdate(BaseModel):
     unique_code: Optional[str] = None
     industry: Optional[str] = None
     location: Optional[str] = None
+    state: Optional[str] = None
+    pincode: Optional[str] = None
     currency_code: Optional[str] = None
     tier: Optional[str] = None
     tags: Optional[List[str]] = None
@@ -54,6 +58,8 @@ class CompanyResponse(BaseModel):
     unique_code: Optional[str] = None
     industry: Optional[str] = None
     location: Optional[str] = None
+    state: Optional[str] = None
+    pincode: Optional[str] = None
     currency_code: str
     tier: Optional[str] = "Growth Suite"
     tags: Optional[List[str]] = []

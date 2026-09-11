@@ -87,6 +87,8 @@ async def list_companies(
                 unique_code=t.unique_code or t.company_code,
                 industry=t.industry or "General Merchandise",
                 location=t.location or "Headquarters",
+                state=getattr(t, "state", None),
+                pincode=getattr(t, "pincode", None),
                 currency_code=t.currency_code or "INR",
                 tier=getattr(t, "tier", "Growth Suite") or "Growth Suite",
                 tags=getattr(t, "tags", []) or [],
@@ -154,6 +156,21 @@ async def provision_company(
         comp_code = f"{base_code[:6]}{c_counter:02d}"
         c_counter += 1
 
+    # 2c. Look up Lead Inquiry if converted, resolve state and pincode
+    lead_obj = None
+    if company_in.lead_id:
+        lead_res = await db.execute(select(LeadInquiry).where(LeadInquiry.id == company_in.lead_id))
+        lead_obj = lead_res.scalar_one_or_none()
+
+    state_input = company_in.state or (lead_obj.state if lead_obj else None) or company_in.location
+    pincode_input = (company_in.pincode or (lead_obj.pincode if lead_obj else None) or "560103").strip()
+
+    init_state_code, init_state_name = GSTService.normalize_state_code(state_input)
+    if not init_state_code:
+        init_state_code, init_state_name = GSTService.normalize_state_code(company_in.location)
+    if not init_state_code:
+        init_state_code, init_state_name = "29", "Karnataka"
+
     # 3. Create Tenant with brand new UUID and clean slate
     new_tenant_id = uuid.uuid4()
     tier_val = company_in.tier or "Growth Suite"
@@ -169,6 +186,8 @@ async def provision_company(
         unique_code=comp_code,
         industry=company_in.industry.strip(),
         location=company_in.location.strip(),
+        state=init_state_name,
+        pincode=pincode_input,
         currency_code=company_in.currency_code.upper().strip(),
         tier=tier_val,
         tags=tags_val,
@@ -200,17 +219,15 @@ async def provision_company(
     db.add(admin_user)
 
     # 5. Initialize legal settings and invoice sequence for new tenant
-    init_state_code, init_state_name = GSTService.normalize_state_code(company_in.location)
-    if not init_state_code:
-        init_state_code, init_state_name = "29", "Karnataka"
-
+    reg_addr = f"{company_in.location.strip()}, {init_state_name} - {pincode_input}"
     tenant_settings = TenantSettings(
         tenant_id=new_tenant_id,
         legal_business_name=company_in.company_name.strip(),
         gstin="",
-        registered_address=company_in.location.strip(),
+        registered_address=reg_addr,
         state=init_state_name,
         state_code=init_state_code,
+        pincode=pincode_input,
         authorized_signatory_name=company_in.admin_full_name.strip(),
         invoice_prefix="INV",
     )
@@ -224,12 +241,9 @@ async def provision_company(
     db.add(invoice_seq)
 
     # 5b. Link Lead Inquiry if converted
-    if company_in.lead_id:
-        lead_res = await db.execute(select(LeadInquiry).where(LeadInquiry.id == company_in.lead_id))
-        lead = lead_res.scalar_one_or_none()
-        if lead:
-            lead.status = "converted"
-            lead.converted_tenant_id = new_tenant_id
+    if lead_obj:
+        lead_obj.status = "converted"
+        lead_obj.converted_tenant_id = new_tenant_id
 
     # 5c. Initialize Billing Models (In same transaction per Requirement 1)
     setup_amount = float(company_in.setup_fee)
@@ -332,6 +346,8 @@ async def provision_company(
         unique_code=new_tenant.unique_code,
         industry=new_tenant.industry,
         location=new_tenant.location,
+        state=new_tenant.state,
+        pincode=new_tenant.pincode,
         currency_code=new_tenant.currency_code,
         tier=new_tenant.tier,
         tags=new_tenant.tags,
@@ -383,6 +399,28 @@ async def update_company(
         tenant.industry = company_update.industry.strip()
     if company_update.location is not None:
         tenant.location = company_update.location.strip()
+    if company_update.state is not None:
+        tenant.state = company_update.state.strip()
+    if company_update.pincode is not None:
+        tenant.pincode = company_update.pincode.strip()
+
+    # Sync state and pincode to TenantSettings if updated
+    if company_update.state is not None or company_update.pincode is not None or company_update.location is not None:
+        t_sett_res = await db.execute(select(TenantSettings).where(TenantSettings.tenant_id == tenant.id))
+        t_sett = t_sett_res.scalar_one_or_none()
+        if t_sett:
+            if company_update.state is not None:
+                c, n = GSTService.normalize_state_code(company_update.state)
+                if c and n:
+                    t_sett.state_code = c
+                    t_sett.state = n
+            if company_update.pincode is not None:
+                t_sett.pincode = company_update.pincode.strip()
+            loc_val = tenant.location or "Headquarters"
+            st_val = t_sett.state or "Karnataka"
+            pin_val = t_sett.pincode or "560103"
+            t_sett.registered_address = f"{loc_val}, {st_val} - {pin_val}"
+
     if company_update.currency_code is not None:
         tenant.currency_code = company_update.currency_code.upper().strip()
     if company_update.tier is not None:
@@ -438,6 +476,8 @@ async def update_company(
         unique_code=tenant.unique_code,
         industry=tenant.industry,
         location=tenant.location,
+        state=tenant.state,
+        pincode=tenant.pincode,
         currency_code=tenant.currency_code,
         tier=tenant.tier,
         tags=tenant.tags,
@@ -521,7 +561,10 @@ async def list_leads(
     """
     query = select(LeadInquiry).order_by(LeadInquiry.created_at.desc())
     if status and status != "all":
-        query = query.where(LeadInquiry.status == status)
+        if status == "new":
+            query = query.where(LeadInquiry.status.in_(["new", "pending"]))
+        else:
+            query = query.where(LeadInquiry.status == status)
 
     result = await db.execute(query)
     return result.scalars().all()

@@ -238,6 +238,70 @@ class GSTService:
         return None, None
 
     @staticmethod
+    def calculate_tax_split(
+        taxable_amount: float,
+        gst_rate: float = 18.0,
+        seller_state: str = "Karnataka",
+        customer_state: str = "Karnataka",
+    ) -> Dict[str, Any]:
+        """
+        Unified scalar GST split calculator for any platform billing, setup fee, or service invoice.
+        Intra-state (same state): CGST (half) + SGST (half), IGST = 0.
+        Inter-state (diff state): IGST (full), CGST = 0, SGST = 0.
+        """
+        s_code, s_name = GSTService.normalize_state_code(seller_state)
+        pos_code, pos_name = GSTService.normalize_state_code(customer_state)
+        if not s_code:
+            s_code, s_name = "29", "Karnataka"
+        if not pos_code:
+            pos_code, pos_name = "29", "Karnataka"
+
+        is_inter = (s_code != pos_code)
+        amt = Decimal(str(taxable_amount or 0)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        rate = Decimal(str(gst_rate or 0))
+
+        if rate == Decimal("0") or amt == Decimal("0"):
+            cgst_amt = Decimal("0.00")
+            sgst_amt = Decimal("0.00")
+            igst_amt = Decimal("0.00")
+            cgst_rate = Decimal("0.00")
+            sgst_rate = Decimal("0.00")
+            igst_rate = Decimal("0.00")
+        elif is_inter:
+            cgst_amt = Decimal("0.00")
+            sgst_amt = Decimal("0.00")
+            cgst_rate = Decimal("0.00")
+            sgst_rate = Decimal("0.00")
+            igst_rate = rate
+            igst_amt = (amt * (igst_rate / Decimal("100"))).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        else:
+            cgst_rate = (rate / Decimal("2")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+            sgst_rate = cgst_rate
+            igst_rate = Decimal("0.00")
+            cgst_amt = (amt * (cgst_rate / Decimal("100"))).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+            sgst_amt = (amt * (sgst_rate / Decimal("100"))).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+            igst_amt = Decimal("0.00")
+
+        total = amt + cgst_amt + sgst_amt + igst_amt
+        return {
+            "is_inter_state": is_inter,
+            "seller_state": s_name,
+            "seller_state_code": s_code,
+            "customer_state": pos_name,
+            "customer_state_code": pos_code,
+            "place_of_supply": f"{pos_code} - {pos_name}",
+            "taxable_amount": float(amt),
+            "gst_rate": float(rate),
+            "cgst_rate": float(cgst_rate),
+            "cgst_amount": float(cgst_amt),
+            "sgst_rate": float(sgst_rate),
+            "sgst_amount": float(sgst_amt),
+            "igst_rate": float(igst_rate),
+            "igst_amount": float(igst_amt),
+            "total_amount": float(total),
+        }
+
+    @staticmethod
     def calculate_invoice_taxes(
         seller_state_code: str,
         place_of_supply_state_code: str,

@@ -1,5 +1,6 @@
 import os
 import urllib.parse
+import asyncio
 from typing import Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,11 +26,17 @@ def build_whatsapp_url(lead: LeadInquiry) -> str:
     clean_phone = normalize_whatsapp_phone(admin_wa)
     modules_str = ", ".join([m.capitalize() for m in (lead.selected_modules or [])])
     
+    loc_str = f"{lead.location}"
+    if lead.state:
+        loc_str += f", {lead.state}"
+    if lead.pincode:
+        loc_str += f" - {lead.pincode}"
+
     text_content = (
         f"Hello Invenza Team! We are requesting an enterprise access quotation:\n\n"
         f"• Company: {lead.company_name} ({lead.industry})\n"
         f"• Contact: {lead.contact_name} | {lead.email} | {lead.phone}\n"
-        f"• Location: {lead.location}\n"
+        f"• Location: {loc_str}\n"
         f"• Scale: {lead.estimated_warehouses} Hubs | {lead.estimated_skus} SKUs | {lead.estimated_monthly_orders} orders/mo\n"
         f"• Estimated Tier: {lead.tier_estimate}\n"
         f"• Modules: {modules_str}\n"
@@ -54,6 +61,8 @@ async def submit_lead_inquiry(
         company_code=inquiry_in.company_code.strip() if inquiry_in.company_code else None,
         industry=inquiry_in.industry.strip(),
         location=inquiry_in.location.strip(),
+        state=inquiry_in.state.strip() if inquiry_in.state else None,
+        pincode=inquiry_in.pincode.strip() if inquiry_in.pincode else None,
         contact_name=inquiry_in.contact_name.strip(),
         email=inquiry_in.email.strip().lower(),
         phone=inquiry_in.phone.strip(),
@@ -64,7 +73,7 @@ async def submit_lead_inquiry(
         selected_modules=inquiry_in.selected_modules,
         tier_estimate=inquiry_in.tier_estimate,
         notes=inquiry_in.notes.strip() if inquiry_in.notes else None,
-        status="pending",
+        status="new",
     )
 
     db.add(new_lead)
@@ -78,6 +87,8 @@ async def submit_lead_inquiry(
         "company_code": new_lead.company_code,
         "industry": new_lead.industry,
         "location": new_lead.location,
+        "state": new_lead.state,
+        "pincode": new_lead.pincode,
         "contact_name": new_lead.contact_name,
         "email": new_lead.email,
         "phone": new_lead.phone,
@@ -90,12 +101,20 @@ async def submit_lead_inquiry(
         "notes": new_lead.notes,
     }
     
-    try:
-        await EmailService.send_lead_inquiry_notification(lead_dict)
-    except Exception as e:
-        print(f"[Lead Inquiry Notification Error]: {e}")
+    # 1 & 2. Concurrently dispatch Email notifications to Super Admin and Customer
+    async def _dispatch_notifications():
+        try:
+            await asyncio.gather(
+                EmailService.send_lead_inquiry_notification(lead_dict),
+                EmailService.send_quote_confirmation_email(lead_dict),
+                return_exceptions=True,
+            )
+        except Exception as e:
+            print(f"[Lead Notification Dispatch Error]: {e}")
 
-    # 2. Build WhatsApp Click-to-Chat URL
+    asyncio.create_task(_dispatch_notifications())
+
+    # 3. Build WhatsApp Click-to-Chat URL
     wa_url = build_whatsapp_url(new_lead)
 
     response_data = LeadInquiryResponse.from_orm(new_lead) if hasattr(LeadInquiryResponse, "from_orm") else LeadInquiryResponse.model_validate(new_lead)

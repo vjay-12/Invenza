@@ -124,6 +124,8 @@ export const api = {
     unique_code?: string;
     industry: string;
     location: string;
+    state?: string;
+    pincode?: string;
     currency_code: string;
     tier?: string;
     tags?: string[];
@@ -186,7 +188,11 @@ export const api = {
       const err = await res.json().catch(() => ({}));
       throw new Error(err.detail || 'Failed to submit quotation inquiry.');
     }
-    return await res.json();
+    const result = await res.json();
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new Event('invenza_notifications_refresh'));
+    }
+    return result;
   },
 
   getLeads: async (status?: string) => {
@@ -194,11 +200,16 @@ export const api = {
     return fetchWithFallback<any[]>(`/superadmin/leads${qs}`);
   },
 
-  updateLeadStatus: async (leadId: string, status: string, quoted_amount?: number, notes?: string) =>
-    fetchWithFallback<any>(`/superadmin/leads/${leadId}/status`, {
+  updateLeadStatus: async (leadId: string, status: string, quoted_amount?: number, notes?: string) => {
+    const res = await fetchWithFallback<any>(`/superadmin/leads/${leadId}/status`, {
       method: 'PATCH',
       body: JSON.stringify({ status, quoted_amount, notes }),
-    }),
+    });
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new Event('invenza_notifications_refresh'));
+    }
+    return res;
+  },
 
   // Security Safeguards (Dual-Authorization Queue & Audit Logs)
   getSecurityRequests: async (status?: string) => {

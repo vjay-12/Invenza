@@ -295,6 +295,20 @@ async def update_user_role_and_permissions(
     await db.commit()
     await db.refresh(target_user)
 
+    # Dispatch official role & access change notification to user
+    try:
+        await EmailService.send_role_change_notification(
+            user_email=target_user.email,
+            user_name=target_user.full_name or "Team Member",
+            company_name=tenant.name if tenant else "Invenza Enterprise",
+            previous_role=before_vals["role"],
+            new_role=target_user.role,
+            permissions_count=len(target_user.permissions or []),
+            admin_name=admin.full_name or "Super Admin",
+        )
+    except Exception as e:
+        print(f"[Role Change Email Warning]: {e}")
+
     return {
         "success": True,
         "message": f"Updated {target_user.full_name}'s role to {req.role.capitalize()}",

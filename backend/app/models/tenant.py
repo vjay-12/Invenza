@@ -14,6 +14,8 @@ class Tenant(Base):
     unique_code = Column(String(50), unique=True, index=True, nullable=True)
     industry = Column(String(100), nullable=True, default="General Merchandise")
     location = Column(String(255), nullable=True, default="Headquarters")
+    state = Column(String(100), nullable=True)
+    pincode = Column(String(10), nullable=True)
     currency_code = Column(String(10), default="INR", nullable=False)
     tier = Column(String(100), default="Growth Suite", nullable=False)
     tags = Column(JSONB, default=list, nullable=False)

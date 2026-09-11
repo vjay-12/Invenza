@@ -8,6 +8,8 @@ class LeadInquiryCreate(BaseModel):
     company_code: Optional[str] = Field(None, max_length=50)
     industry: str = Field("General Merchandise", max_length=100)
     location: str = Field("Headquarters", max_length=255)
+    state: str = Field(..., min_length=2, max_length=100, description="Operating state for GST calculation")
+    pincode: str = Field(..., min_length=6, max_length=10, description="6-digit postal pincode")
     contact_name: str = Field(..., min_length=2, max_length=255)
     email: str = Field(..., min_length=5, max_length=255)
     phone: str = Field(..., min_length=5, max_length=50)
@@ -35,6 +37,8 @@ class LeadInquiryResponse(BaseModel):
     company_code: Optional[str] = None
     industry: str
     location: str
+    state: Optional[str] = None
+    pincode: Optional[str] = None
     contact_name: str
     email: str
     phone: str
