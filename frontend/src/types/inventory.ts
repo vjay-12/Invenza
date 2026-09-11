@@ -7,6 +7,7 @@ export interface Location {
   name: string;
   code: string;
   address?: string;
+  city?: string;
   capacity?: number;
   isActive: boolean;
 }
@@ -28,8 +29,13 @@ export interface Product {
   unitOfMeasure: string;
   costPrice: number;
   sellPrice: number;
+  currency?: CurrencyCode;
   barcode: string;
   reorderPoint: number;
+  maxStock?: number;                         // Maximum inventory capacity/threshold
+  warehouseId?: string;                      // Default/primary warehouse location id
+  hsnCode: string;                           // HSN/SAC code e.g. 8471
+  gstRate: number;                           // GST rate percentage e.g. 18.0 (0, 5, 18, 40)
   variantAttributes: Record<string, string>; // e.g. { Color: "Midnight Blue", Size: "XL" }
   customFields: Record<string, any>;         // e.g. { batchNumber: "B-2026-X", expiryDate: "2027-12-31" }
   currentStock: number;                      // Aggregated from ledger
@@ -88,12 +94,23 @@ export interface SOLineItem {
   orderedQty: number;
   fulfilledQty: number;
   unitPrice: number;
+  discountPercent?: number;
 }
 
 export interface SalesOrder {
   id: string;
   soNumber: string;
   customerName: string;
+  customerGstin?: string;
+  billingAddress?: string;
+  shippingAddress?: string;
+  state?: string;
+  stateCode?: string;
+  billingState?: string;
+  billingStateCode?: string;
+  shippingState?: string;
+  shippingStateCode?: string;
+  invoiceId?: string;
   status: 'pending' | 'fulfilled' | 'cancelled';
   sourceLocationId: string;
   sourceLocationName: string;
@@ -102,6 +119,81 @@ export interface SalesOrder {
   items: SOLineItem[];
   totalAmount: number;
   notes?: string;
+}
+
+export type InvoiceStatus = 'draft' | 'issued' | 'paid' | 'void';
+
+export interface InvoiceItem {
+  id: string;
+  productId?: string;
+  itemDescription: string;
+  hsnCode: string;
+  quantity: number;
+  unitOfMeasure: string;
+  unitPrice: number;
+  discount: number;
+  taxableValue: number;
+  gstRate: number;
+  cgstRate: number;
+  cgstAmount: number;
+  sgstRate: number;
+  sgstAmount: number;
+  igstRate: number;
+  igstAmount: number;
+  total: number;
+}
+
+export interface Invoice {
+  id: string;
+  tenantId: string;
+  invoiceNumber: string;
+  salesOrderId?: string;
+  invoiceDate: string;
+  dueDate?: string;
+  placeOfSupply: string;
+  status: InvoiceStatus;
+  sellerLegalName: string;
+  sellerGstin: string;
+  sellerPan: string;
+  sellerAddress: string;
+  sellerState: string;
+  sellerStateCode: string;
+  customerName: string;
+  customerGstin?: string;
+  customerBillingAddress: string;
+  customerShippingAddress: string;
+  customerState: string;
+  customerStateCode: string;
+  isInterState: boolean;
+  totalTaxableValue: number;
+  totalCgst: number;
+  totalSgst: number;
+  totalIgst: number;
+  roundOff: number;
+  grandTotal: number;
+  grandTotalWords: string;
+  pdfUrl?: string;
+  items: InvoiceItem[];
+}
+
+export interface TenantInvoicingSettings {
+  tenantId: string;
+  legalBusinessName: string;
+  gstin: string;
+  pan: string;
+  registeredAddress: string;
+  state: string;
+  stateCode: string;
+  logoUrl?: string;
+  authorizedSignatoryName: string;
+  signatureUrl?: string;
+  bankName: string;
+  bankAccountNumber: string;
+  bankIfscCode: string;
+  bankBranch: string;
+  accountHolderName: string;
+  invoicePrefix: string;
+  autoEmailInvoice: boolean;
 }
 
 export interface StockTransfer {
@@ -147,4 +239,4 @@ export interface WebhookConfig {
   secret: string;
 }
 
-export type CurrencyCode = 'USD' | 'EUR' | 'INR' | 'GBP';
+export type CurrencyCode = 'USD' | 'EUR' | 'INR';

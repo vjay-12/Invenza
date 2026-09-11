@@ -1,4 +1,0 @@
-sku,name,category,unit_of_measure,cost_price,sell_price,reorder_point,barcode,variant_attribute
-SAMPLE-KB-991,Corsair K70 RGB Pro Mechanical,Electronics,pcs,90.00,169.99,10,890123987111,Cherry MX Red
-SAMPLE-HP-992,Sony WH-1000XM5 Noise Cancelling,Electronics,pcs,220.00,399.00,8,890554123999,Silver
-SAMPLE-DK-993,Standing Desk Dual Motor 140cm,Furniture,pcs,180.00,349.00,5,890987332111,Walnut

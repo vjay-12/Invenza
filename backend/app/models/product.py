@@ -17,6 +17,9 @@ class Product(Base):
     sell_price = Column(Numeric(12, 4), default=0.00, nullable=False)
     barcode = Column(String(100), nullable=True, index=True)
     reorder_point = Column(Numeric(12, 2), default=10.00, nullable=False)
+    max_stock = Column(Numeric(12, 2), nullable=True, default=100.00)
+    hsn_code = Column(String(20), nullable=False, default="8471")  # Harmonized System Nomenclature (e.g. 8471, 9403)
+    gst_rate = Column(Numeric(5, 2), nullable=False, default=18.00)  # GST rate percentage (e.g. 5.0, 12.0, 18.0, 28.0)
     
     # Simple attribute tags (e.g. {"color": "Blue", "size": "L"})
     variant_attributes = Column(JSONB, default=dict, nullable=False)

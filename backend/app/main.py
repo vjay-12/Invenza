@@ -1,7 +1,20 @@
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.api.v1.api import api_router
+from app.core.database import AsyncSessionLocal
+from app.api.v1.endpoints.billing import generate_monthly_maintenance_cycles
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup: Ensure continuous monthly maintenance cycles exist for all active orgs
+    try:
+        async with AsyncSessionLocal() as session:
+            await generate_monthly_maintenance_cycles(session)
+    except Exception as e:
+        print(f"[Auto-Billing Startup Warning]: {e}")
+    yield
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -9,6 +22,7 @@ app = FastAPI(
     version="1.0.0",
     docs_url="/docs",
     redoc_url="/redoc",
+    lifespan=lifespan,
 )
 
 # Set CORS middleware

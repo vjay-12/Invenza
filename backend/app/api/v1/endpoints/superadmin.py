@@ -1,5 +1,6 @@
 import uuid
 import re
+from datetime import datetime
 from uuid import UUID
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Query
@@ -15,15 +16,23 @@ from app.models.product import Product
 from app.models.location import Location
 from app.models.order import PurchaseOrder, SalesOrder
 from app.models.ledger import StockMovement
+from app.models.lead import LeadInquiry
+from app.models.invoice import TenantSettings, TenantInvoiceSequence
+from app.models.audit_log import AuditLog
+from app.models.billing import TenantBillingProfile, OrgSetupFee, OrgMaintenancePlan, OrgMaintenanceCycle
 from app.schemas.tenant import (
     CompanyCreate,
     CompanyUpdate,
     CompanyResponse,
     CompanyAnalyticsResponse,
 )
+from app.schemas.lead import LeadInquiryResponse, LeadInquiryStatusUpdate
 from app.services.email_service import EmailService
+from app.services.gst_service import GSTService
 
 router = APIRouter()
+
+MASTER_TENANT_ID = UUID("00000000-0000-0000-0000-000000000000")
 
 def slugify(text: str) -> str:
     text = text.lower().strip()
@@ -42,7 +51,7 @@ async def list_companies(
     """
     Super Admin: List all enterprise tenant companies with metrics.
     """
-    query = select(Tenant).order_by(Tenant.created_at.desc())
+    query = select(Tenant).where(Tenant.id != MASTER_TENANT_ID).order_by(Tenant.created_at.desc())
     if search:
         s = f"%{search.strip()}%"
         query = query.where((Tenant.name.ilike(s)) | (Tenant.industry.ilike(s)) | (Tenant.location.ilike(s)))
@@ -74,13 +83,18 @@ async def list_companies(
                 id=t.id,
                 name=t.name,
                 slug=t.slug,
+                company_code=t.company_code or t.unique_code,
+                unique_code=t.unique_code or t.company_code,
                 industry=t.industry or "General Merchandise",
                 location=t.location or "Headquarters",
-                currency_code=t.currency_code or "USD",
+                currency_code=t.currency_code or "INR",
+                tier=getattr(t, "tier", "Growth Suite") or "Growth Suite",
+                tags=getattr(t, "tags", []) or [],
                 enabled_modules=t.enabled_modules or [
                     "products", "locations", "orders", "transfers", "adjustments", "ledger", "reports", "storage"
                 ],
                 is_active=t.is_active,
+                is_archived=getattr(t, "is_archived", False),
                 created_at=t.created_at,
                 updated_at=t.updated_at,
                 admin_email=admin_user.email if admin_user else None,
@@ -97,11 +111,11 @@ async def list_companies(
 async def provision_company(
     company_in: CompanyCreate,
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(require_super_admin),
+    actor: User = Depends(require_super_admin),
 ):
     """
     Super Admin: Provisions a new Company tenant and creates its initial Admin account.
-    Dispatches login credentials to the admin's email.
+    Dispatches login credentials to the admin's email and initializes billing profile.
     """
     # 1. Check if admin email already exists globally
     email_clean = company_in.admin_email.strip().lower()
@@ -123,15 +137,41 @@ async def provision_company(
         slug = f"{base_slug}-{counter}"
         counter += 1
 
+    # 2b. Generate unique company_code
+    provided_code = company_in.unique_code or company_in.company_code
+    if provided_code:
+        base_code = re.sub(r'[^A-Z0-9]', '', provided_code.upper().strip())
+    else:
+        base_code = re.sub(r'[^A-Z0-9]', '', company_in.company_name.upper().strip())[:8] or "COMP"
+    comp_code = base_code
+    c_counter = 1
+    while True:
+        existing_code = await db.execute(
+            select(Tenant).where((Tenant.company_code == comp_code) | (Tenant.unique_code == comp_code))
+        )
+        if not existing_code.scalar_one_or_none():
+            break
+        comp_code = f"{base_code[:6]}{c_counter:02d}"
+        c_counter += 1
+
     # 3. Create Tenant with brand new UUID and clean slate
     new_tenant_id = uuid.uuid4()
+    tier_val = company_in.tier or "Growth Suite"
+    tags_val = company_in.tags or []
+    if tier_val and tier_val not in tags_val:
+        tags_val = list(tags_val) + [tier_val]
+
     new_tenant = Tenant(
         id=new_tenant_id,
         name=company_in.company_name.strip(),
         slug=slug,
+        company_code=comp_code,
+        unique_code=comp_code,
         industry=company_in.industry.strip(),
         location=company_in.location.strip(),
         currency_code=company_in.currency_code.upper().strip(),
+        tier=tier_val,
+        tags=tags_val,
         enabled_modules=company_in.enabled_modules,
         is_active=True,
     )
@@ -152,16 +192,127 @@ async def provision_company(
             "orders:manage",
             "team:manage",
             "reports:view",
-            "settings:manage",
+            "storage:manage",
+            "invoicing:manage",
         ],
         is_active=True,
     )
     db.add(admin_user)
+
+    # 5. Initialize legal settings and invoice sequence for new tenant
+    init_state_code, init_state_name = GSTService.normalize_state_code(company_in.location)
+    if not init_state_code:
+        init_state_code, init_state_name = "29", "Karnataka"
+
+    tenant_settings = TenantSettings(
+        tenant_id=new_tenant_id,
+        legal_business_name=company_in.company_name.strip(),
+        gstin="",
+        registered_address=company_in.location.strip(),
+        state=init_state_name,
+        state_code=init_state_code,
+        authorized_signatory_name=company_in.admin_full_name.strip(),
+        invoice_prefix="INV",
+    )
+    db.add(tenant_settings)
+
+    invoice_seq = TenantInvoiceSequence(
+        tenant_id=new_tenant_id,
+        fiscal_year="2026-27",
+        current_number=0,
+    )
+    db.add(invoice_seq)
+
+    # 5b. Link Lead Inquiry if converted
+    if company_in.lead_id:
+        lead_res = await db.execute(select(LeadInquiry).where(LeadInquiry.id == company_in.lead_id))
+        lead = lead_res.scalar_one_or_none()
+        if lead:
+            lead.status = "converted"
+            lead.converted_tenant_id = new_tenant_id
+
+    # 5c. Initialize Billing Models (In same transaction per Requirement 1)
+    setup_amount = float(company_in.setup_fee)
+    maintenance_rate = float(company_in.monthly_maintenance_fee)
+    now_dt = datetime.utcnow()
+    current_month_str = now_dt.strftime("%Y-%m")
+
+    # 1. Create Setup Fee record: amount, status = Pending, payment mode = null, recorded_by = provisioning Super Admin
+    setup_fee_rec = OrgSetupFee(
+        org_id=new_tenant_id,
+        amount=setup_amount,
+        status="Pending",
+        payment_mode=None,
+        date_paid=None,
+        recorded_by=actor.full_name or actor.email,
+        note="Initial platform setup fee assigned at provisioning",
+    )
+    db.add(setup_fee_rec)
+
+    # 2. Create Monthly Maintenance Plan record: current rate, effective_from = provisioning date
+    plan_rec = OrgMaintenancePlan(
+        org_id=new_tenant_id,
+        current_rate=maintenance_rate,
+        effective_from=now_dt,
+        changed_by=actor.full_name or actor.email,
+        reason="Initial agreed maintenance rate at provisioning",
+    )
+    db.add(plan_rec)
+
+    # 3. Create initial monthly cycle row for continuous gap-free history
+    cycle_rec = OrgMaintenanceCycle(
+        org_id=new_tenant_id,
+        cycle_month=current_month_str,
+        amount=maintenance_rate,
+        status="Pending",
+        recorded_by=actor.full_name or actor.email,
+        note=f"Initial provisioning monthly cycle for {current_month_str}",
+    )
+    db.add(cycle_rec)
+
+    # 4. Backward-compatible TenantBillingProfile
+    billing_prof = TenantBillingProfile(
+        tenant_id=new_tenant_id,
+        setup_fee=setup_amount,
+        setup_fee_status="pending",
+        setup_fee_paid_at=None,
+        setup_fee_payment_mode=None,
+        setup_fee_recorded_by=actor.full_name or actor.email,
+        monthly_maintenance_fee=maintenance_rate,
+        maintenance_currency="INR",
+        billing_cycle_day=1,
+    )
+    db.add(billing_prof)
+
+    # 5d. Record Security Safeguards Audit Log
+    audit_entry = AuditLog(
+        actor_id=actor.id,
+        actor_name=actor.full_name or "Super Admin",
+        actor_email=actor.email,
+        tenant_id=new_tenant_id,
+        tenant_name=new_tenant.name,
+        action_type="company_provisioned",
+        target_type="tenant",
+        target_id=str(new_tenant_id),
+        description=f"Provisioned organization '{new_tenant.name}' with admin {email_clean}, setup fee ₹{setup_amount:,.2f}, and monthly rate ₹{maintenance_rate:,.2f}",
+        after_values={
+            "name": new_tenant.name,
+            "company_code": new_tenant.company_code,
+            "tier": tier_val,
+            "tags": tags_val,
+            "admin_email": email_clean,
+            "setup_fee": setup_amount,
+            "monthly_maintenance_fee": maintenance_rate,
+            "lead_id": str(company_in.lead_id) if company_in.lead_id else None,
+        },
+    )
+    db.add(audit_entry)
+
     await db.commit()
     await db.refresh(new_tenant)
     await db.refresh(admin_user)
 
-    # 5. Dispatch Welcome Email
+    # 6. Send Onboarding Email with credentials
     if company_in.send_email:
         await EmailService.send_company_admin_credentials(
             company_name=new_tenant.name,
@@ -177,11 +328,16 @@ async def provision_company(
         id=new_tenant.id,
         name=new_tenant.name,
         slug=new_tenant.slug,
+        company_code=new_tenant.company_code,
+        unique_code=new_tenant.unique_code,
         industry=new_tenant.industry,
         location=new_tenant.location,
         currency_code=new_tenant.currency_code,
+        tier=new_tenant.tier,
+        tags=new_tenant.tags,
         enabled_modules=new_tenant.enabled_modules,
         is_active=new_tenant.is_active,
+        is_archived=new_tenant.is_archived,
         created_at=new_tenant.created_at,
         updated_at=new_tenant.updated_at,
         admin_email=admin_user.email,
@@ -196,7 +352,7 @@ async def update_company(
     company_id: UUID,
     company_update: CompanyUpdate,
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(require_super_admin),
+    actor: User = Depends(require_super_admin),
 ):
     """
     Super Admin: Update company metadata and enabled modules.
@@ -206,18 +362,64 @@ async def update_company(
     if not tenant:
         raise HTTPException(status_code=404, detail="Company not found")
 
+    before_vals = {
+        "name": tenant.name,
+        "industry": tenant.industry,
+        "location": tenant.location,
+        "tier": tenant.tier,
+        "tags": tenant.tags,
+        "is_active": tenant.is_active,
+    }
+
     if company_update.name is not None:
         tenant.name = company_update.name.strip()
+    updated_code = company_update.unique_code or company_update.company_code
+    if updated_code is not None:
+        clean_code = re.sub(r'[^A-Z0-9]', '', updated_code.upper().strip())
+        if clean_code:
+            tenant.company_code = clean_code
+            tenant.unique_code = clean_code
     if company_update.industry is not None:
         tenant.industry = company_update.industry.strip()
     if company_update.location is not None:
         tenant.location = company_update.location.strip()
     if company_update.currency_code is not None:
         tenant.currency_code = company_update.currency_code.upper().strip()
+    if company_update.tier is not None:
+        tenant.tier = company_update.tier.strip()
+    if company_update.tags is not None:
+        tenant.tags = company_update.tags
     if company_update.enabled_modules is not None:
         tenant.enabled_modules = company_update.enabled_modules
     if company_update.is_active is not None:
         tenant.is_active = company_update.is_active
+    if company_update.is_archived is not None:
+        tenant.is_archived = company_update.is_archived
+
+    after_vals = {
+        "name": tenant.name,
+        "industry": tenant.industry,
+        "location": tenant.location,
+        "tier": tenant.tier,
+        "tags": tenant.tags,
+        "is_active": tenant.is_active,
+    }
+
+    # Record Audit Log
+    audit_entry = AuditLog(
+        actor_id=actor.id,
+        actor_name=actor.full_name or "Super Admin",
+        actor_email=actor.email,
+        tenant_id=tenant.id,
+        tenant_name=tenant.name,
+        action_type="company_updated",
+        target_type="tenant",
+        target_id=str(tenant.id),
+        description=f"Updated details for company '{tenant.name}'",
+        before_values=before_vals,
+        after_values=after_vals,
+    )
+    db.add(audit_entry)
 
     await db.commit()
     await db.refresh(tenant)
@@ -232,11 +434,16 @@ async def update_company(
         id=tenant.id,
         name=tenant.name,
         slug=tenant.slug,
+        company_code=tenant.company_code,
+        unique_code=tenant.unique_code,
         industry=tenant.industry,
         location=tenant.location,
         currency_code=tenant.currency_code,
+        tier=tenant.tier,
+        tags=tenant.tags,
         enabled_modules=tenant.enabled_modules,
         is_active=tenant.is_active,
+        is_archived=getattr(tenant, "is_archived", False),
         created_at=tenant.created_at,
         updated_at=tenant.updated_at,
         admin_email=admin_user.email if admin_user else None,
@@ -246,11 +453,125 @@ async def update_company(
         storage_count=0,
     )
 
+@router.post("/companies/{company_id}/archive")
+async def archive_company(
+    company_id: UUID,
+    archive: Optional[bool] = Query(None),
+    payload: Optional[dict] = None,
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(require_super_admin),
+):
+    """
+    Super Admin: Archive or restore an organization.
+    When archived, login for all users of this organization is blocked.
+    """
+    res = await db.execute(select(Tenant).where(Tenant.id == company_id))
+    tenant = res.scalar_one_or_none()
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Company not found")
+
+    target_archive = True
+    if payload and "is_archived" in payload:
+        target_archive = bool(payload["is_archived"])
+    elif archive is not None:
+        target_archive = bool(archive)
+
+    tenant.is_archived = target_archive
+    if target_archive:
+        tenant.is_active = False
+    else:
+        tenant.is_active = True
+
+    action_str = "archived" if tenant.is_archived else "restored"
+
+    audit_entry = AuditLog(
+        actor_id=actor.id,
+        actor_name=actor.full_name or "Super Admin",
+        actor_email=actor.email,
+        tenant_id=tenant.id,
+        tenant_name=tenant.name,
+        action_type=f"company_{action_str}",
+        target_type="tenant",
+        target_id=str(tenant.id),
+        description=f"Company '{tenant.name}' was {action_str}",
+        after_values={"is_active": tenant.is_active, "is_archived": tenant.is_archived},
+    )
+    db.add(audit_entry)
+
+    await db.commit()
+    await db.refresh(tenant)
+
+    return {
+        "success": True,
+        "company_id": str(tenant.id),
+        "company_name": tenant.name,
+        "is_archived": tenant.is_archived,
+        "is_active": tenant.is_active,
+        "message": f"Company '{tenant.name}' has been {action_str}.",
+    }
+
+@router.get("/leads", response_model=List[LeadInquiryResponse])
+async def list_leads(
+    status: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(require_super_admin),
+):
+    """
+    Super Admin: List all prospective customer access and quotation requests.
+    """
+    query = select(LeadInquiry).order_by(LeadInquiry.created_at.desc())
+    if status and status != "all":
+        query = query.where(LeadInquiry.status == status)
+
+    result = await db.execute(query)
+    return result.scalars().all()
+
+@router.patch("/leads/{lead_id}/status", response_model=LeadInquiryResponse)
+async def update_lead_status(
+    lead_id: UUID,
+    status_in: LeadInquiryStatusUpdate,
+    db: AsyncSession = Depends(get_db),
+    actor: User = Depends(require_super_admin),
+):
+    """
+    Super Admin: Update status of a prospective lead inquiry.
+    """
+    res = await db.execute(select(LeadInquiry).where(LeadInquiry.id == lead_id))
+    lead = res.scalar_one_or_none()
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead inquiry not found")
+
+    old_status = lead.status
+    lead.status = status_in.status.strip().lower()
+    if status_in.quoted_amount is not None:
+        lead.quoted_amount = status_in.quoted_amount
+    if status_in.notes is not None:
+        lead.notes = status_in.notes
+
+    audit_entry = AuditLog(
+        actor_id=actor.id,
+        actor_name=actor.full_name or "Super Admin",
+        actor_email=actor.email,
+        tenant_id=None,
+        tenant_name=lead.company_name,
+        action_type="lead_status_updated",
+        target_type="lead",
+        target_id=str(lead.id),
+        description=f"Lead '{lead.company_name}' status changed from '{old_status}' to '{lead.status}'",
+        before_values={"status": old_status},
+        after_values={"status": lead.status, "quoted_amount": float(lead.quoted_amount or 0)},
+    )
+    db.add(audit_entry)
+
+    await db.commit()
+    await db.refresh(lead)
+    return lead
+
 @router.patch("/companies/{company_id}/toggle-status")
 async def toggle_company_status(
     company_id: UUID,
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(require_super_admin),
+    actor: User = Depends(require_super_admin),
 ):
     """
     Super Admin: Toggle active/deactive status for a company.
@@ -261,10 +582,27 @@ async def toggle_company_status(
         raise HTTPException(status_code=404, detail="Company not found")
 
     tenant.is_active = not tenant.is_active
+    tenant.is_archived = not tenant.is_active
+
+    status_str = "activated" if tenant.is_active else "deactivated"
+
+    audit_entry = AuditLog(
+        actor_id=actor.id,
+        actor_name=actor.full_name or "Super Admin",
+        actor_email=actor.email,
+        tenant_id=tenant.id,
+        tenant_name=tenant.name,
+        action_type=f"company_{status_str}",
+        target_type="tenant",
+        target_id=str(tenant.id),
+        description=f"Company '{tenant.name}' was {status_str}",
+        after_values={"is_active": tenant.is_active, "is_archived": tenant.is_archived},
+    )
+    db.add(audit_entry)
+
     await db.commit()
     await db.refresh(tenant)
 
-    status_str = "activated" if tenant.is_active else "deactivated"
     return {
         "success": True,
         "company_id": str(tenant.id),
@@ -336,7 +674,7 @@ async def get_platform_report(
     """
     Super Admin: Global cross-tenant platform report.
     """
-    tenants_res = await db.execute(select(Tenant))
+    tenants_res = await db.execute(select(Tenant).where(Tenant.id != MASTER_TENANT_ID))
     tenants = tenants_res.scalars().all()
 
     total_companies = len(tenants)
@@ -357,7 +695,7 @@ async def get_platform_report(
     total_users = total_users_res.scalar_one() or 0
 
     return {
-        "generated_at": func.now(),
+        "generated_at": datetime.utcnow().isoformat(),
         "total_companies": total_companies,
         "active_companies": active_companies,
         "inactive_companies": inactive_companies,

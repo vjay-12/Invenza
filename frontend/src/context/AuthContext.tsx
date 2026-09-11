@@ -23,6 +23,7 @@ interface AuthContextType {
   login: (email: string, password: string) => Promise<void>;
   demoLogin: (type: 'super_admin' | 'company_admin' | 'staff') => Promise<void>;
   logout: () => void;
+  updateUserLocal: (partial: Partial<AuthUser>) => void;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -112,6 +113,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     localStorage.removeItem('invenza_user');
   };
 
+  const updateUserLocal = (partial: Partial<AuthUser>) => {
+    setUser((prev) => {
+      if (!prev) return null;
+      const updated = { ...prev, ...partial };
+      localStorage.setItem('invenza_user', JSON.stringify(updated));
+      return updated;
+    });
+  };
+
   const isSuperAdmin = user?.role === 'super_admin';
   const isCompanyAdmin = user?.role === 'admin';
 
@@ -127,6 +137,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         login,
         demoLogin,
         logout,
+        updateUserLocal,
       }}
     >
       {children}

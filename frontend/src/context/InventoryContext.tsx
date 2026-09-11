@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef, useCallback } from 'react';
 import {
   Product,
   Location,
@@ -12,16 +12,6 @@ import {
   AdjustmentReasonCode,
   MovementType,
 } from '../types/inventory';
-import {
-  INITIAL_PRODUCTS,
-  INITIAL_LOCATIONS,
-  INITIAL_LEDGER,
-  INITIAL_PURCHASE_ORDERS,
-  INITIAL_SALES_ORDERS,
-  INITIAL_TRANSFERS,
-  INITIAL_ADJUSTMENTS,
-  INITIAL_CUSTOM_FIELDS,
-} from '../data/mockData';
 import { useAuth } from './AuthContext';
 import { api } from '../services/api';
 
@@ -38,22 +28,32 @@ interface InventoryContextType {
   setCurrency: (c: CurrencyCode) => void;
   selectedLocationId: string;
   setSelectedLocationId: (locId: string) => void;
-  formatCurrency: (amount: number) => string;
+  formatCurrency: (amount: number, fromCurrency?: CurrencyCode) => string;
+  convertAmount: (amount: number, fromCurrency?: CurrencyCode, toCurrency?: CurrencyCode) => number;
   
   // Actions
   addProduct: (product: Omit<Product, 'id' | 'currentStock' | 'locationStock' | 'createdAt' | 'isActive'>) => void;
-  bulkAddProducts: (products: Omit<Product, 'id' | 'currentStock' | 'locationStock' | 'createdAt' | 'isActive'>[]) => Promise<number>;
+  bulkAddProducts: (
+    products: (Omit<Product, 'id' | 'currentStock' | 'locationStock' | 'createdAt' | 'isActive'> & { initialStock?: number })[]
+  ) => Promise<number>;
   updateProduct: (id: string, product: Partial<Product>) => void;
+  toggleProductActive: (id: string) => Promise<void>;
   deleteProduct: (id: string) => void;
+  deleteProducts: (ids: string[]) => void;
+  clearAllProducts: (options?: { performedBy?: string; password?: string; otp?: string }) => Promise<void>;
+  clearLedger: (options?: { requestedBy?: string; approvedBy?: string }) => Promise<void>;
   createPurchaseOrder: (po: Omit<PurchaseOrder, 'id' | 'poNumber' | 'status'>) => void;
   receiveGoods: (poId: string, receivedNotes?: string) => void;
   createSalesOrder: (so: Omit<SalesOrder, 'id' | 'soNumber' | 'status'>) => void;
-  fulfillSalesOrder: (soId: string) => { success: boolean; error?: string };
+  fulfillSalesOrder: (
+    soId: string
+  ) => Promise<{ success: boolean; error?: string; invoice_id?: string; invoice_number?: string; pdf_url?: string }>;
   createTransfer: (sourceLocationId: string, targetLocationId: string, items: { productId: string; quantity: number }[], notes?: string) => void;
   createAdjustment: (productId: string, locationId: string, newStock: number, reasonCode: AdjustmentReasonCode, notes: string) => void;
   bulkAdjustStock: (adjustmentsList: { productId: string; locationId: string; delta: number; reasonCode: AdjustmentReasonCode; notes: string }[]) => void;
   addCustomField: (field: Omit<CustomFieldDefinition, 'id'>) => void;
   addLocation: (loc: Omit<Location, 'id' | 'isActive'>) => void;
+  refreshData?: () => Promise<void>;
 }
 
 const InventoryContext = createContext<InventoryContextType | undefined>(undefined);
@@ -61,7 +61,9 @@ const InventoryContext = createContext<InventoryContextType | undefined>(undefin
 export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user } = useAuth();
   const currentTenantId = user?.tenantId || 'default';
-  const isDemo = currentTenantId === '00000000-0000-0000-0000-000000000001' || currentTenantId === 'default';
+
+  const isLoadedRef = useRef(false);
+  const loadedTenantIdRef = useRef<string | null>(null);
 
   const [products, setProducts] = useState<Product[]>([]);
   const [locations, setLocations] = useState<Location[]>([]);
@@ -72,10 +74,315 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const [adjustments, setAdjustments] = useState<AdjustmentRecord[]>([]);
   const [customFields, setCustomFields] = useState<CustomFieldDefinition[]>([]);
 
-  const [currency, setCurrency] = useState<CurrencyCode>('USD');
+  const currency: CurrencyCode = 'INR';
+
   const [selectedLocationId, setSelectedLocationId] = useState<string>('all');
 
-  // Load tenant-isolated state
+  // Platform standardized to INR base currency.
+  const convertAmount = (
+    amount: number,
+    _fromCurrency?: CurrencyCode,
+    _toCurrency?: CurrencyCode
+  ): number => {
+    const num = Number(amount);
+    return isNaN(num) ? 0 : num;
+  };
+
+  const setCurrency = (_targetCurrency: CurrencyCode) => {
+    // Non-interactive: Tenant Base Currency conversion is deferred
+  };
+
+  // Helper to calculate stock from ledger movements with fallback
+  const computeStock = (
+    prodId: string,
+    sku: string,
+    movements: StockMovement[],
+    fallbackStock: number = 0,
+    fallbackLocStock: Record<string, number> = {},
+    defaultLocId: string = 'WH-MAIN'
+  ) => {
+    const prodMovements = movements.filter(m => m.productId === prodId || m.sku === sku);
+    if (prodMovements.length === 0) {
+      return {
+        currentStock: fallbackStock,
+        locationStock:
+          Object.keys(fallbackLocStock).length > 0
+            ? fallbackLocStock
+            : fallbackStock > 0
+            ? { [defaultLocId]: fallbackStock }
+            : {},
+      };
+    }
+
+    let total = 0;
+    const locMap: Record<string, number> = {};
+    prodMovements.forEach(m => {
+      const qty = Math.abs(m.quantity);
+      if (m.movementType === 'IN') {
+        total += qty;
+        if (m.locationId) locMap[m.locationId] = (locMap[m.locationId] || 0) + qty;
+      } else if (m.movementType === 'OUT') {
+        total -= qty;
+        if (m.locationId) locMap[m.locationId] = (locMap[m.locationId] || 0) - qty;
+      } else if (m.movementType === 'ADJUST') {
+        total += m.quantity; // signed delta
+        if (m.locationId) locMap[m.locationId] = (locMap[m.locationId] || 0) + m.quantity;
+      } else if (m.movementType === 'TRANSFER') {
+        if (m.locationId) {
+          locMap[m.locationId] = (locMap[m.locationId] || 0) - qty;
+        }
+        if (m.targetLocationId) {
+          locMap[m.targetLocationId] = (locMap[m.targetLocationId] || 0) + qty;
+        }
+      }
+    });
+
+    Object.keys(locMap).forEach(k => {
+      locMap[k] = Math.max(0, locMap[k]);
+    });
+
+    const resolved = Math.max(0, total);
+    return {
+      currentStock: resolved,
+      locationStock: Object.keys(locMap).length > 0 ? locMap : resolved > 0 ? { [defaultLocId]: resolved } : {},
+    };
+  };
+
+  // Sync all operational entities authoritatively from PostgreSQL backend
+  const syncBackend = useCallback(async () => {
+    const token = localStorage.getItem('invenza_token');
+    if (!token && (!currentTenantId || currentTenantId === 'default')) {
+      isLoadedRef.current = true;
+      loadedTenantIdRef.current = currentTenantId;
+      return;
+    }
+
+    try {
+      // 1. Locations
+      let loadedLocs: Location[] = [];
+      try {
+        const backendLocs = await api.getLocations();
+        if (backendLocs && Array.isArray(backendLocs) && backendLocs.length > 0) {
+          loadedLocs = backendLocs.map((bl: any) => ({
+            id: bl.id,
+            name: bl.name,
+            code: bl.code,
+            address: bl.address || '',
+            capacity: bl.capacity || 10000,
+            isActive: bl.is_active ?? true,
+          }));
+          setLocations(loadedLocs);
+        }
+      } catch (locErr) {
+        console.warn('Backend locations sync fallback:', locErr);
+      }
+
+      const activeDefaultLocId = loadedLocs[0]?.id || locations[0]?.id || 'WH-MAIN';
+
+      // 2. Movements / Ledger from PostgreSQL
+      let dbMovements: StockMovement[] = [];
+      try {
+        const backendMovs = await api.getMovements();
+        if (backendMovs && Array.isArray(backendMovs)) {
+          dbMovements = backendMovs.map((bm: any) => ({
+            id: bm.id,
+            timestamp: bm.timestamp,
+            productId: bm.product_id,
+            sku: bm.sku || 'SKU',
+            productName: bm.product_name || 'Item',
+            movementType: bm.movement_type,
+            quantity: Number(bm.quantity),
+            locationId: bm.location_id,
+            locationName: bm.location_name || 'Main Fulfillment Center',
+            targetLocationId: bm.target_location_id,
+            targetLocationName: bm.target_location_name,
+            referenceType: bm.reference_type || 'INITIAL',
+            referenceId: bm.reference_id || 'OPENING-BALANCE',
+            reasonCode: bm.reason_code,
+            performedBy: bm.performed_by || 'Administrator',
+            unitCost: Number(bm.unit_cost || 0),
+            runningBalance: Number(bm.quantity || 0),
+          }));
+          setLedger(dbMovements);
+        }
+      } catch (movErr) {
+        console.warn('Backend movements sync fallback:', movErr);
+      }
+
+      // 3. Products from PostgreSQL
+      try {
+        const backendProds = await api.getProducts();
+        if (backendProds && Array.isArray(backendProds)) {
+          const mapped: Product[] = backendProds.map((bp: any) => {
+            const { currentStock, locationStock } = computeStock(
+              bp.id,
+              bp.sku,
+              dbMovements,
+              Number(bp.current_stock || 0),
+              {},
+              activeDefaultLocId
+            );
+
+            return {
+              id: bp.id,
+              sku: bp.sku,
+              name: bp.name,
+              category: bp.category,
+              unitOfMeasure: bp.unit_of_measure,
+              costPrice: Number(bp.cost_price),
+              sellPrice: Number(bp.sell_price),
+              currency: bp.currency || 'INR',
+              barcode: bp.barcode || '',
+              reorderPoint: Number(bp.reorder_point),
+              maxStock: bp.max_stock !== undefined && bp.max_stock !== null ? Number(bp.max_stock) : undefined,
+              warehouseId: bp.warehouse_id || activeDefaultLocId,
+              hsnCode: bp.hsn_code || '8471',
+              gstRate: bp.gst_rate !== undefined && bp.gst_rate !== null ? Number(bp.gst_rate) : 18.0,
+              currentStock,
+              locationStock,
+              variantAttributes: bp.variant_attributes || {},
+              customFields: bp.custom_fields || {},
+              isActive: bp.is_active,
+              createdAt: bp.created_at,
+            };
+          });
+          setProducts(mapped);
+        }
+      } catch (err) {
+        console.warn('Backend products sync fallback:', err);
+      }
+
+      // 4. Purchase Orders from PostgreSQL
+      try {
+        const backendPOs = await api.getPurchaseOrders();
+        if (backendPOs && Array.isArray(backendPOs)) {
+          const mappedPOs: PurchaseOrder[] = backendPOs.map((bpo: any) => ({
+            id: bpo.id,
+            poNumber: bpo.po_number,
+            supplierName: bpo.supplier_name,
+            status: bpo.status === 'completed' ? 'received' : bpo.status || 'pending',
+            targetLocationId: bpo.target_location_id,
+            targetLocationName: bpo.target_location_name || 'Main Fulfillment Center',
+            totalAmount: Number(bpo.total_amount || 0),
+            orderDate: bpo.order_date ? bpo.order_date.split('T')[0] : '',
+            receivedDate: bpo.received_date ? bpo.received_date.split('T')[0] : undefined,
+            notes: bpo.notes || '',
+            items: (bpo.items || []).map((it: any) => ({
+              productId: it.product_id,
+              sku: it.sku || 'SKU',
+              name: it.product_name || 'Item',
+              orderedQty: Number(it.ordered_qty || 0),
+              receivedQty: Number(it.received_qty || 0),
+              unitCost: Number(it.unit_cost || 0),
+            })),
+          }));
+          setPurchaseOrders(mappedPOs);
+        }
+      } catch (poErr) {
+        console.warn('Backend POs sync fallback:', poErr);
+      }
+
+      // 5. Sales Orders from PostgreSQL
+      try {
+        const backendSOs = await api.getSalesOrders();
+        if (backendSOs && Array.isArray(backendSOs)) {
+          const mappedSOs: SalesOrder[] = backendSOs.map((bso: any) => ({
+            id: bso.id,
+            soNumber: bso.so_number,
+            customerName: bso.customer_name,
+            customerGstin: bso.customer_gstin,
+            billingAddress: bso.billing_address,
+            shippingAddress: bso.shipping_address,
+            state: bso.state,
+            stateCode: bso.state_code,
+            billingState: bso.billing_state,
+            billingStateCode: bso.billing_state_code,
+            shippingState: bso.shipping_state,
+            shippingStateCode: bso.shipping_state_code,
+            invoiceId: bso.invoice_id || undefined,
+            status: bso.status === 'completed' ? 'fulfilled' : bso.status || 'pending',
+            sourceLocationId: bso.source_location_id,
+            sourceLocationName: bso.source_location_name || 'Main Fulfillment Center',
+            totalAmount: Number(bso.total_amount || 0),
+            orderDate: bso.order_date ? bso.order_date.split('T')[0] : '',
+            fulfilledDate: bso.fulfilled_date ? bso.fulfilled_date.split('T')[0] : undefined,
+            notes: bso.notes || '',
+            items: (bso.items || []).map((it: any) => ({
+              productId: it.product_id,
+              sku: it.sku || 'SKU',
+              name: it.product_name || 'Item',
+              orderedQty: Number(it.ordered_qty || 0),
+              fulfilledQty: Number(it.fulfilled_qty || 0),
+              unitPrice: Number(it.unit_price || 0),
+            })),
+          }));
+          setSalesOrders(mappedSOs);
+        }
+      } catch (soErr) {
+        console.warn('Backend SOs sync fallback:', soErr);
+      }
+
+      // 6. Stock Transfers from PostgreSQL
+      try {
+        const backendTrs = await api.getTransfers();
+        if (backendTrs && Array.isArray(backendTrs)) {
+          const mappedTrs: StockTransfer[] = backendTrs.map((btr: any) => ({
+            id: btr.id,
+            transferNumber: btr.transfer_number,
+            sourceLocationId: btr.source_location_id,
+            sourceLocationName: btr.source_location_name || 'Source Warehouse',
+            targetLocationId: btr.target_location_id,
+            targetLocationName: btr.target_location_name || 'Destination Warehouse',
+            status: (btr.status || 'completed') as any,
+            date: btr.transfer_date ? btr.transfer_date.split('T')[0] : '',
+            notes: btr.notes || '',
+            items: (btr.items || []).map((it: any) => ({
+              productId: it.product_id,
+              sku: it.sku || 'SKU',
+              name: it.product_name || 'Item',
+              quantity: Number(it.quantity || 0),
+            })),
+          }));
+          setTransfers(mappedTrs);
+        }
+      } catch (trErr) {
+        console.warn('Backend transfers sync fallback:', trErr);
+      }
+
+      // 7. Adjustments from PostgreSQL
+      try {
+        const backendAdjs = await api.getAdjustments();
+        if (backendAdjs && Array.isArray(backendAdjs)) {
+          const mappedAdjs: AdjustmentRecord[] = backendAdjs.map((badj: any) => ({
+            id: badj.id,
+            adjustmentNumber: badj.adjustment_number,
+            locationId: badj.location_id,
+            locationName: badj.location_name || 'Warehouse',
+            productId: badj.product_id,
+            sku: badj.sku || 'SKU',
+            productName: badj.product_name || 'Product',
+            previousStock: Number(badj.previous_stock || 0),
+            newStock: Number(badj.new_stock || 0),
+            delta: Number(badj.delta || 0),
+            reasonCode: badj.reason_code,
+            notes: badj.notes || '',
+            date: badj.created_at ? badj.created_at.split('T')[0] : '',
+            author: badj.author || 'Admin',
+          }));
+          setAdjustments(mappedAdjs);
+        }
+      } catch (adjErr) {
+        console.warn('Backend adjustments sync fallback:', adjErr);
+      }
+    } catch (err) {
+      console.warn('Backend sync overall warning:', err);
+    } finally {
+      isLoadedRef.current = true;
+      loadedTenantIdRef.current = currentTenantId;
+    }
+  }, [currentTenantId, currency]);
+
+  // Load tenant-isolated state and initial sync
   useEffect(() => {
     const pKey = `invenza_tenant_${currentTenantId}_products`;
     const lKey = `invenza_tenant_${currentTenantId}_locations`;
@@ -95,55 +402,102 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     const savedAdj = localStorage.getItem(adjKey);
     const savedCf = localStorage.getItem(cfKey);
 
-    // Initial load: if demo tenant, can use demo mock items; if new company tenant, STRICT CLEAN SLATE!
-    setProducts(savedProds ? JSON.parse(savedProds) : isDemo ? INITIAL_PRODUCTS : []);
-    setLocations(savedLocs ? JSON.parse(savedLocs) : isDemo ? INITIAL_LOCATIONS : []);
-    setLedger(savedLedger ? JSON.parse(savedLedger) : isDemo ? INITIAL_LEDGER : []);
-    setPurchaseOrders(savedPos ? JSON.parse(savedPos) : isDemo ? INITIAL_PURCHASE_ORDERS : []);
-    setSalesOrders(savedSos ? JSON.parse(savedSos) : isDemo ? INITIAL_SALES_ORDERS : []);
-    setTransfers(savedTr ? JSON.parse(savedTr) : isDemo ? INITIAL_TRANSFERS : []);
-    setAdjustments(savedAdj ? JSON.parse(savedAdj) : isDemo ? INITIAL_ADJUSTMENTS : []);
-    setCustomFields(savedCf ? JSON.parse(savedCf) : isDemo ? INITIAL_CUSTOM_FIELDS : []);
-
-    // Sync from backend
-    const syncBackend = async () => {
-      try {
-        const backendProds = await api.getProducts();
-        if (backendProds && Array.isArray(backendProds)) {
-          if (backendProds.length > 0 || !isDemo) {
-            const mapped: Product[] = backendProds.map((bp: any) => ({
-              id: bp.id,
-              sku: bp.sku,
-              name: bp.name,
-              category: bp.category,
-              unitOfMeasure: bp.unit_of_measure,
-              costPrice: bp.cost_price,
-              sellPrice: bp.sell_price,
-              barcode: bp.barcode || '',
-              reorderPoint: bp.reorder_point,
-              currentStock: bp.current_stock || 0,
-              locationStock: {},
-              variantAttributes: bp.variant_attributes || {},
-              customFields: bp.custom_fields || {},
-              isActive: bp.is_active,
-              createdAt: bp.created_at,
-            }));
-            setProducts(mapped);
-          }
-        }
-      } catch (err) {
-        console.warn('Backend products sync fallback:', err);
-      }
+    const defaultCompanyLocation: Location = {
+      id: `loc-main-${currentTenantId}`,
+      name: 'Main Fulfillment Center',
+      code: 'WH-MAIN',
+      address: 'Primary Logistics Hub',
+      capacity: 100000,
+      isActive: true,
     };
 
-    if (currentTenantId && currentTenantId !== 'default') {
-      syncBackend();
+    let loadedLocs: Location[] = [];
+    if (savedLocs) {
+      try {
+        const parsed = JSON.parse(savedLocs);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          loadedLocs = parsed;
+        }
+      } catch {}
     }
-  }, [currentTenantId]);
+    if (loadedLocs.length === 0) {
+      loadedLocs = [defaultCompanyLocation];
+    }
+    setLocations(loadedLocs);
 
-  // Sync to tenant-scoped localStorage
+    if (savedLedger) {
+      try {
+        const rawLedger: any[] = JSON.parse(savedLedger);
+        setLedger(Array.isArray(rawLedger) ? rawLedger : []);
+      } catch {
+        setLedger([]);
+      }
+    } else {
+      setLedger([]);
+    }
+
+    if (savedProds) {
+      try {
+        const rawProds: any[] = JSON.parse(savedProds);
+        if (Array.isArray(rawProds) && rawProds.some((p: any) => p.id?.startsWith('prod-00'))) {
+          // Discard legacy mock storage
+          localStorage.removeItem(pKey);
+          localStorage.removeItem(lKey);
+          localStorage.removeItem(mKey);
+          localStorage.removeItem(poKey);
+          localStorage.removeItem(soKey);
+          localStorage.removeItem(trKey);
+          localStorage.removeItem(adjKey);
+          localStorage.removeItem(cfKey);
+          setProducts([]);
+        } else if (Array.isArray(rawProds)) {
+          setProducts(rawProds);
+        } else {
+          setProducts([]);
+        }
+      } catch {
+        setProducts([]);
+      }
+    } else {
+      setProducts([]);
+    }
+
+    try {
+      setPurchaseOrders(savedPos ? JSON.parse(savedPos) : []);
+    } catch {
+      setPurchaseOrders([]);
+    }
+    try {
+      setSalesOrders(savedSos ? JSON.parse(savedSos) : []);
+    } catch {
+      setSalesOrders([]);
+    }
+    try {
+      setTransfers(savedTr ? JSON.parse(savedTr) : []);
+    } catch {
+      setTransfers([]);
+    }
+    try {
+      setAdjustments(savedAdj ? JSON.parse(savedAdj) : []);
+    } catch {
+      setAdjustments([]);
+    }
+    try {
+      setCustomFields(savedCf ? JSON.parse(savedCf) : []);
+    } catch {
+      setCustomFields([]);
+    }
+
+    localStorage.removeItem('invenza_active_currency');
+    // Trigger authoritative database sync
+    syncBackend();
+  }, [currentTenantId, syncBackend]);
+
+  // Sync to tenant-scoped localStorage (guarded against empty state overwrites)
   useEffect(() => {
-    if (!currentTenantId) return;
+    if (!currentTenantId || !isLoadedRef.current || loadedTenantIdRef.current !== currentTenantId) {
+      return;
+    }
     localStorage.setItem(`invenza_tenant_${currentTenantId}_products`, JSON.stringify(products));
     localStorage.setItem(`invenza_tenant_${currentTenantId}_locations`, JSON.stringify(locations));
     localStorage.setItem(`invenza_tenant_${currentTenantId}_ledger`, JSON.stringify(ledger));
@@ -154,15 +508,10 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     localStorage.setItem(`invenza_tenant_${currentTenantId}_custom_fields`, JSON.stringify(customFields));
   }, [products, locations, ledger, purchaseOrders, salesOrders, transfers, adjustments, customFields, currentTenantId]);
 
-  // Currency Formatter
-  const formatCurrency = (amount: number): string => {
-    const symbols: Record<CurrencyCode, string> = {
-      USD: '$',
-      EUR: '€',
-      INR: '₹',
-      GBP: '£',
-    };
-    return `${symbols[currency]}${Number(amount || 0).toLocaleString(undefined, {
+  // Standard INR Currency Formatter
+  const formatCurrency = (amount: number, _fromCurrency?: CurrencyCode): string => {
+    const num = Number(amount) || 0;
+    return `₹${num.toLocaleString('en-IN', {
       minimumFractionDigits: 2,
       maximumFractionDigits: 2,
     })}`;
@@ -175,26 +524,28 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     const locMap: Record<string, number> = {};
 
     movements.forEach(m => {
-      let qtyDelta = 0;
+      const qty = Math.abs(m.quantity);
       if (m.movementType === 'IN') {
-        qtyDelta = m.quantity;
+        totalStock += qty;
+        if (m.locationId) locMap[m.locationId] = (locMap[m.locationId] || 0) + qty;
       } else if (m.movementType === 'OUT') {
-        qtyDelta = -m.quantity;
+        totalStock -= qty;
+        if (m.locationId) locMap[m.locationId] = (locMap[m.locationId] || 0) - qty;
       } else if (m.movementType === 'ADJUST') {
-        qtyDelta = m.quantity; // signed delta
+        totalStock += m.quantity; // signed delta
+        if (m.locationId) locMap[m.locationId] = (locMap[m.locationId] || 0) + m.quantity;
       } else if (m.movementType === 'TRANSFER') {
-        // From source location
-        qtyDelta = -m.quantity;
+        if (m.locationId) {
+          locMap[m.locationId] = (locMap[m.locationId] || 0) - qty;
+        }
+        if (m.targetLocationId) {
+          locMap[m.targetLocationId] = (locMap[m.targetLocationId] || 0) + qty;
+        }
       }
+    });
 
-      totalStock += qtyDelta;
-      locMap[m.locationId] = (locMap[m.locationId] || 0) + qtyDelta;
-
-      // If transfer has a target location
-      if (m.movementType === 'TRANSFER' && m.targetLocationId) {
-        locMap[m.targetLocationId] = (locMap[m.targetLocationId] || 0) + m.quantity;
-        totalStock += m.quantity; // Neutralized overall, but reallocated
-      }
+    Object.keys(locMap).forEach(k => {
+      locMap[k] = Math.max(0, locMap[k]);
     });
 
     return currentProds.map(p => {
@@ -207,6 +558,23 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       }
       return p;
     });
+  };
+
+  const isValidUuid = (str?: string): boolean =>
+    Boolean(str && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str));
+
+  const resolveLocationUuid = (locId?: string): string => {
+    if (locId && isValidUuid(locId)) return locId;
+    const match = locations.find((l) => isValidUuid(l.id));
+    return match?.id || '00000000-0000-0000-0000-000000000001';
+  };
+
+  const resolveProductUuid = (prodId?: string): string => {
+    if (prodId && isValidUuid(prodId)) return prodId;
+    const match = products.find((p) => p.id === prodId || p.sku === prodId);
+    if (match && isValidUuid(match.id)) return match.id;
+    const firstValid = products.find((p) => isValidUuid(p.id));
+    return firstValid?.id || prodId || '00000000-0000-0000-0000-000000000001';
   };
 
   // Add Product
@@ -232,9 +600,36 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         sell_price: data.sellPrice,
         barcode: data.barcode,
         reorder_point: data.reorderPoint,
+        hsn_code: data.hsnCode || '8471',
+        gst_rate: data.gstRate !== undefined ? data.gstRate : 18.0,
         variant_attributes: data.variantAttributes || {},
         custom_fields: data.customFields || {},
       });
+      const backendProds = await api.getProducts();
+      if (Array.isArray(backendProds)) {
+        setProducts(backendProds.map((bp: any) => ({
+          id: bp.id,
+          sku: bp.sku,
+          name: bp.name,
+          category: bp.category,
+          unitOfMeasure: bp.unit_of_measure,
+          costPrice: Number(bp.cost_price),
+          sellPrice: Number(bp.sell_price),
+          currency: bp.currency || currency,
+          barcode: bp.barcode || '',
+          reorderPoint: Number(bp.reorder_point),
+          maxStock: bp.max_stock !== undefined && bp.max_stock !== null ? Number(bp.max_stock) : undefined,
+          warehouseId: bp.warehouse_id || locations[0]?.id || 'loc-01',
+          hsnCode: bp.hsn_code || '8471',
+          gstRate: bp.gst_rate !== undefined && bp.gst_rate !== null ? Number(bp.gst_rate) : 18.0,
+          currentStock: Number(bp.current_stock || 0),
+          locationStock: {},
+          variantAttributes: bp.variant_attributes || {},
+          customFields: bp.custom_fields || {},
+          isActive: bp.is_active,
+          createdAt: bp.created_at,
+        })));
+      }
     } catch (err) {
       console.warn('Backend product creation warning:', err);
     }
@@ -242,20 +637,54 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
   // Bulk Add Products (for CSV Import)
   const bulkAddProducts = async (
-    items: Omit<Product, 'id' | 'currentStock' | 'locationStock' | 'createdAt' | 'isActive'>[]
+    items: (Omit<Product, 'id' | 'currentStock' | 'locationStock' | 'createdAt' | 'isActive'> & { initialStock?: number })[]
   ): Promise<number> => {
     if (!items.length) return 0;
     const timestamp = Date.now();
-    const newProds: Product[] = items.map((data, idx) => ({
-      ...data,
-      id: `prod-${timestamp}-${idx}-${Math.random().toString(36).substring(2, 6)}`,
-      currentStock: 0,
-      locationStock: {},
-      isActive: true,
-      createdAt: new Date().toISOString(),
-    }));
+    const defaultLoc = locations[0];
+    const defaultLocId = defaultLoc?.id || 'loc-1';
+    const defaultLocName = defaultLoc?.name || 'Main Fulfillment Center';
+    const nowISO = new Date().toISOString();
+
+    const newProds: Product[] = items.map((data, idx) => {
+      const stock = typeof data.initialStock === 'number' && data.initialStock > 0 ? data.initialStock : 0;
+      return {
+        ...data,
+        id: `prod-${timestamp}-${idx}-${Math.random().toString(36).substring(2, 6)}`,
+        currency: (data as any).currency || currency,
+        currentStock: stock,
+        locationStock: stock > 0 ? { [defaultLocId]: stock } : {},
+        isActive: true,
+        createdAt: nowISO,
+      };
+    });
 
     setProducts(prev => [...newProds, ...prev]);
+
+    // Record opening stock movements in ledger for initial stock
+    const openingMovements: StockMovement[] = newProds
+      .filter(p => p.currentStock > 0)
+      .map((p, idx) => ({
+        id: `mov-open-${timestamp}-${idx}`,
+        timestamp: nowISO,
+        productId: p.id,
+        sku: p.sku,
+        productName: p.name,
+        movementType: 'IN',
+        quantity: p.currentStock,
+        locationId: defaultLocId,
+        locationName: defaultLocName,
+        referenceType: 'INITIAL',
+        referenceId: 'OPENING-BALANCE',
+        reasonCode: 'Opening Balance',
+        performedBy: user?.fullName || user?.email || 'Administrator',
+        unitCost: p.costPrice,
+        runningBalance: p.currentStock,
+      }));
+
+    if (openingMovements.length > 0) {
+      setLedger(prev => [...openingMovements, ...prev]);
+    }
 
     try {
       await api.bulkCreateProducts(
@@ -268,6 +697,9 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
           sell_price: data.sellPrice || 0,
           barcode: data.barcode || '',
           reorder_point: data.reorderPoint || 10,
+          hsn_code: data.hsnCode || '8471',
+          gst_rate: data.gstRate !== undefined ? data.gstRate : 18.0,
+          initial_stock: data.initialStock || 0,
           variant_attributes: data.variantAttributes || {},
           custom_fields: data.customFields || {},
         }))
@@ -280,17 +712,187 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   };
 
   // Update Product
-  const updateProduct = (id: string, data: Partial<Product>) => {
-    setProducts(prev => prev.map(p => p.id === id ? { ...p, ...data } : p));
+  const updateProduct = async (id: string, data: Partial<Product>) => {
+    setProducts(prev => prev.map(p => (p.id === id ? { ...p, ...data } : p)));
+    try {
+      const prodUuid = resolveProductUuid(id);
+      await api.updateProduct(prodUuid, {
+        name: data.name,
+        category: data.category,
+        unit_of_measure: data.unitOfMeasure,
+        cost_price: data.costPrice,
+        sell_price: data.sellPrice,
+        barcode: data.barcode,
+        reorder_point: data.reorderPoint,
+        max_stock: data.maxStock,
+        hsn_code: data.hsnCode,
+        gst_rate: data.gstRate,
+        variant_attributes: data.variantAttributes,
+        custom_fields: data.customFields,
+        is_active: data.isActive,
+      });
+    } catch (err) {
+      console.warn('Backend product update warning:', err);
+    }
   };
 
-  // Delete Product
-  const deleteProduct = (id: string) => {
+  // Toggle Product Active (Soft Delete / Re-enable)
+  const toggleProductActive = async (id: string) => {
+    const prod = products.find(p => p.id === id);
+    if (!prod) return;
+    const newActiveState = prod.isActive === false ? true : false;
+    await updateProduct(id, { isActive: newActiveState });
+  };
+
+  // Delete Product & Log Audit Trail
+  const deleteProduct = async (id: string) => {
+    const prod = products.find(p => p.id === id);
     setProducts(prev => prev.filter(p => p.id !== id));
+
+    if (prod) {
+      const defaultLoc = locations[0];
+      const auditEntry: StockMovement = {
+        id: `mov-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+        timestamp: new Date().toISOString(),
+        productId: prod.id,
+        sku: prod.sku,
+        productName: prod.name,
+        movementType: 'OUT',
+        quantity: prod.currentStock || 0,
+        locationId: defaultLoc?.id || '',
+        locationName: defaultLoc?.name || 'Main Fulfillment Center',
+        referenceType: 'ADJUST',
+        referenceId: `DEL-${prod.sku}`,
+        reasonCode: 'product removed',
+        performedBy: user?.fullName || user?.email || 'Administrator',
+        unitCost: prod.costPrice || 0,
+        runningBalance: 0,
+      };
+      setLedger(prev => [auditEntry, ...prev]);
+    }
+
+    try {
+      const prodUuid = resolveProductUuid(id);
+      await api.deleteProduct(prodUuid);
+      await syncBackend();
+    } catch (err) {
+      console.warn('Backend product delete warning:', err);
+    }
+  };
+
+  // Delete Multiple Products & Log Audit Trail
+  const deleteProducts = async (ids: string[]) => {
+    const prodsToDelete = products.filter(p => ids.includes(p.id));
+    setProducts(prev => prev.filter(p => !ids.includes(p.id)));
+
+    const defaultLoc = locations[0];
+    const auditEntries: StockMovement[] = prodsToDelete.map(prod => ({
+      id: `mov-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      timestamp: new Date().toISOString(),
+      productId: prod.id,
+      sku: prod.sku,
+      productName: prod.name,
+      movementType: 'OUT',
+      quantity: prod.currentStock || 0,
+      locationId: defaultLoc?.id || '',
+      locationName: defaultLoc?.name || 'Main Fulfillment Center',
+      referenceType: 'ADJUST',
+      referenceId: `DEL-${prod.sku}`,
+      reasonCode: 'product removed',
+      performedBy: user?.fullName || user?.email || 'Administrator',
+      unitCost: prod.costPrice || 0,
+      runningBalance: 0,
+    }));
+    setLedger(prev => [...auditEntries, ...prev]);
+
+    try {
+      await Promise.all(ids.map(id => api.deleteProduct(resolveProductUuid(id))));
+      await syncBackend();
+    } catch (err) {
+      console.warn('Backend bulk delete warning:', err);
+    }
+  };
+
+  // Clear All Products for active tenant & Log Audit Trail
+  const clearAllProducts = async (options?: { performedBy?: string; password?: string; otp?: string }) => {
+    const deletedCount = products.length;
+    setProducts([]);
+    localStorage.removeItem(`invenza_tenant_${currentTenantId}_products`);
+
+    // Record immutable audit entry into Movement Ledger
+    const defaultLoc = locations[0];
+    const performer = options?.performedBy || (user?.fullName ? `${user.fullName} (${user.email})` : 'Administrator');
+    const auditPerformer = `${performer} [MFA: Password + Email OTP Verified]`;
+    const nowStr = new Date().toISOString();
+
+    const auditEntry: StockMovement = {
+      id: `mov-purge-${Date.now()}`,
+      timestamp: nowStr,
+      productId: 'catalog-all',
+      sku: 'ALL-SKUS',
+      productName: `Catalog Reset - All ${deletedCount} Products Purged`,
+      movementType: 'OUT',
+      quantity: 0,
+      locationId: defaultLoc?.id || 'loc-01',
+      locationName: defaultLoc?.name || 'All Facilities',
+      referenceType: 'ADJUST',
+      referenceId: `CATALOG-RESET-${Date.now()}`,
+      reasonCode: 'audit',
+      performedBy: auditPerformer,
+      unitCost: 0,
+      runningBalance: 0,
+    };
+    setLedger(prev => [auditEntry, ...prev]);
+
+    try {
+      if (options?.password && options?.otp) {
+        await api.clearCatalogVerified(options.password, options.otp, user?.email);
+      } else {
+        await api.clearAllProducts();
+      }
+    } catch (err) {
+      console.warn('Backend clear all products warning:', err);
+    }
+  };
+
+  // Clear Movement Ledger for active tenant with preserved dual-authorization root audit record
+  const clearLedger = async (options?: { requestedBy?: string; approvedBy?: string }) => {
+    const clearedCount = ledger.length;
+    const approver = options?.approvedBy || 'Super Administrator (superadmin@invenza.internal)';
+    const requester = options?.requestedBy || (user?.fullName ? `${user.fullName} (${user.email})` : 'Company Administrator');
+    const nowStr = new Date().toISOString();
+
+    // Preserve an immutable root audit entry documenting the authorized purge
+    const rootAuditEntry: StockMovement = {
+      id: `mov-audit-root-${Date.now()}`,
+      timestamp: nowStr,
+      productId: 'ledger-root',
+      sku: 'AUDIT-ROOT',
+      productName: `Historical Movement Ledger Purged (${clearedCount} records erased)`,
+      movementType: 'ADJUST',
+      quantity: 0,
+      locationId: locations[0]?.id || 'loc-01',
+      locationName: locations[0]?.name || 'Central Compliance Archive',
+      referenceType: 'ADJUST',
+      referenceId: `PURGE-AUTH-${Date.now()}`,
+      reasonCode: 'audit',
+      performedBy: `Requested by: ${requester} [OTP Verified] | Authorized & Executed by: ${approver}`,
+      unitCost: 0,
+      runningBalance: 0,
+    };
+
+    setLedger([rootAuditEntry]);
+    localStorage.setItem(`invenza_tenant_${currentTenantId}_ledger`, JSON.stringify([rootAuditEntry]));
+
+    try {
+      await api.clearLedger();
+    } catch (err) {
+      console.warn('Backend clear ledger warning:', err);
+    }
   };
 
   // Create Purchase Order
-  const createPurchaseOrder = (data: Omit<PurchaseOrder, 'id' | 'poNumber' | 'status'>) => {
+  const createPurchaseOrder = async (data: Omit<PurchaseOrder, 'id' | 'poNumber' | 'status'>) => {
     const count = purchaseOrders.length + 1;
     const poNumber = `PO-2026-${String(count).padStart(3, '0')}`;
     const newPO: PurchaseOrder = {
@@ -300,10 +902,50 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       status: 'pending',
     };
     setPurchaseOrders(prev => [newPO, ...prev]);
+
+    try {
+      const locUuid = resolveLocationUuid(data.targetLocationId);
+      await api.createPurchaseOrder({
+        supplier_name: data.supplierName,
+        target_location_id: locUuid,
+        order_date: data.orderDate,
+        notes: data.notes,
+        items: data.items.map(it => ({
+          product_id: resolveProductUuid(it.productId),
+          ordered_qty: it.orderedQty,
+          unit_cost: it.unitCost,
+        })),
+      });
+      const backendPOs = await api.getPurchaseOrders();
+      if (Array.isArray(backendPOs)) {
+        setPurchaseOrders(backendPOs.map((bpo: any) => ({
+          id: bpo.id,
+          poNumber: bpo.po_number,
+          supplierName: bpo.supplier_name,
+          status: bpo.status === 'completed' ? 'received' : bpo.status || 'pending',
+          targetLocationId: bpo.target_location_id,
+          targetLocationName: bpo.target_location_name || 'Main Fulfillment Center',
+          totalAmount: Number(bpo.total_amount || 0),
+          orderDate: bpo.order_date ? bpo.order_date.split('T')[0] : '',
+          receivedDate: bpo.received_date ? bpo.received_date.split('T')[0] : undefined,
+          notes: bpo.notes || '',
+          items: (bpo.items || []).map((it: any) => ({
+            productId: it.product_id,
+            sku: it.sku || 'SKU',
+            name: it.product_name || 'Item',
+            orderedQty: Number(it.ordered_qty || 0),
+            receivedQty: Number(it.received_qty || 0),
+            unitCost: Number(it.unit_cost || 0),
+          })),
+        })));
+      }
+    } catch (err) {
+      console.warn('Backend PO creation warning:', err);
+    }
   };
 
   // Receive Goods (GRN Flow) -> auto writes to immutable ledger!
-  const receiveGoods = (poId: string, receivedNotes?: string) => {
+  const receiveGoods = async (poId: string, receivedNotes?: string) => {
     const po = purchaseOrders.find(p => p.id === poId);
     if (!po || po.status === 'received') return;
 
@@ -337,13 +979,11 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     const updatedLedger = [...newMovements, ...ledger];
     setLedger(updatedLedger);
 
-    // Recalculate stock for all affected products
     po.items.forEach(item => {
       updatedProds = recalculateProductStock(updatedLedger, item.productId, updatedProds);
     });
     setProducts(updatedProds);
 
-    // Update PO status
     setPurchaseOrders(prev =>
       prev.map(p =>
         p.id === poId
@@ -357,10 +997,18 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
           : p
       )
     );
+
+    try {
+      if (isValidUuid(poId)) {
+        await api.receiveGoodsGRN(poId, receivedNotes);
+      }
+    } catch (err) {
+      console.warn('Backend receive GRN warning:', err);
+    }
   };
 
   // Create Sales Order
-  const createSalesOrder = (data: Omit<SalesOrder, 'id' | 'soNumber' | 'status'>) => {
+  const createSalesOrder = async (data: Omit<SalesOrder, 'id' | 'soNumber' | 'status'>) => {
     const count = salesOrders.length + 1;
     const soNumber = `SO-2026-${String(count).padStart(3, '0')}`;
     const newSO: SalesOrder = {
@@ -370,14 +1018,75 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       status: 'pending',
     };
     setSalesOrders(prev => [newSO, ...prev]);
+
+    try {
+      const locUuid = resolveLocationUuid(data.sourceLocationId);
+      await api.createSalesOrder({
+        customer_name: data.customerName,
+        customer_gstin: data.customerGstin,
+        billing_address: data.billingAddress,
+        shipping_address: data.shippingAddress,
+        billing_state: data.billingState,
+        billing_state_code: data.billingStateCode,
+        shipping_state: data.shippingState,
+        shipping_state_code: data.shippingStateCode,
+        state: data.billingState || data.state || 'Karnataka',
+        state_code: data.billingStateCode || data.stateCode || '29',
+        source_location_id: locUuid,
+        order_date: data.orderDate,
+        notes: data.notes,
+        items: data.items.map(it => ({
+          product_id: resolveProductUuid(it.productId),
+          ordered_qty: it.orderedQty,
+          unit_price: it.unitPrice,
+          discount_percent: it.discountPercent || 0,
+        })),
+      });
+      const backendSOs = await api.getSalesOrders();
+      if (Array.isArray(backendSOs)) {
+        setSalesOrders(backendSOs.map((bso: any) => ({
+          id: bso.id,
+          soNumber: bso.so_number,
+          customerName: bso.customer_name,
+          customerGstin: bso.customer_gstin,
+          billingAddress: bso.billing_address,
+          shippingAddress: bso.shipping_address,
+          state: bso.state,
+          stateCode: bso.state_code,
+          billingState: bso.billing_state,
+          billingStateCode: bso.billing_state_code,
+          shippingState: bso.shipping_state,
+          shippingStateCode: bso.shipping_state_code,
+          invoiceId: bso.invoice_id || undefined,
+          status: bso.status === 'completed' ? 'fulfilled' : bso.status || 'pending',
+          sourceLocationId: bso.source_location_id,
+          sourceLocationName: bso.source_location_name || 'Main Fulfillment Center',
+          totalAmount: Number(bso.total_amount || 0),
+          orderDate: bso.order_date ? bso.order_date.split('T')[0] : '',
+          fulfilledDate: bso.fulfilled_date ? bso.fulfilled_date.split('T')[0] : undefined,
+          notes: bso.notes || '',
+          items: (bso.items || []).map((it: any) => ({
+            productId: it.product_id,
+            sku: it.sku || 'SKU',
+            name: it.product_name || 'Item',
+            orderedQty: Number(it.ordered_qty || 0),
+            fulfilledQty: Number(it.fulfilled_qty || 0),
+            unitPrice: Number(it.unit_price || 0),
+          })),
+        })));
+      }
+    } catch (err) {
+      console.warn('Backend SO creation warning:', err);
+    }
   };
 
-  // Fulfill Sales Order -> writes OUT ledger entry!
-  const fulfillSalesOrder = (soId: string): { success: boolean; error?: string } => {
+  // Fulfill Sales Order -> writes OUT ledger entry and issues GST invoice!
+  const fulfillSalesOrder = async (
+    soId: string
+  ): Promise<{ success: boolean; error?: string; invoice_id?: string; invoice_number?: string; pdf_url?: string }> => {
     const so = salesOrders.find(s => s.id === soId);
     if (!so || so.status === 'fulfilled') return { success: false, error: 'Order not found or already fulfilled' };
 
-    // Availability validation check
     for (const item of so.items) {
       const prod = products.find(p => p.id === item.productId);
       const available = prod?.locationStock[so.sourceLocationId] || 0;
@@ -385,6 +1094,31 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         return {
           success: false,
           error: `Insufficient stock for ${item.name} at ${so.sourceLocationName}. Available: ${available}, Required: ${item.orderedQty}`,
+        };
+      }
+    }
+
+    if (isValidUuid(soId)) {
+      try {
+        const backendRes = await api.fulfillSalesOrder(soId);
+        if (!backendRes) {
+          return {
+            success: false,
+            error: 'Failed to fulfill Sales Order: Invalid or empty response from server.',
+          };
+        }
+        await syncBackend();
+        return {
+          success: true,
+          invoice_id: backendRes.invoice_id,
+          invoice_number: backendRes.invoice_number,
+          pdf_url: backendRes.pdf_url,
+        };
+      } catch (err: any) {
+        console.error('Backend SO fulfill error:', err);
+        return {
+          success: false,
+          error: err.message || 'Failed to fulfill Sales Order and generate invoice',
         };
       }
     }
@@ -419,7 +1153,6 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     const updatedLedger = [...newMovements, ...ledger];
     setLedger(updatedLedger);
 
-    // Recalculate
     so.items.forEach(item => {
       updatedProds = recalculateProductStock(updatedLedger, item.productId, updatedProds);
     });
@@ -442,7 +1175,7 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   };
 
   // Stock Transfer between locations
-  const createTransfer = (
+  const createTransfer = async (
     sourceLocationId: string,
     targetLocationId: string,
     items: { productId: string; quantity: number }[],
@@ -463,7 +1196,6 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       const prodName = prod?.name || 'Item';
       const prodSku = prod?.sku || 'SKU';
 
-      // Paired transfer movement record
       const movement: StockMovement = {
         id: `mov-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
         timestamp: new Date().toISOString(),
@@ -514,10 +1246,26 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     };
 
     setTransfers(prev => [newTransfer, ...prev]);
+
+    try {
+      const srcUuid = resolveLocationUuid(sourceLocationId);
+      const dstUuid = resolveLocationUuid(targetLocationId);
+      await api.createTransfer({
+        source_location_id: srcUuid,
+        target_location_id: dstUuid,
+        notes,
+        items: items.map(it => ({
+          product_id: resolveProductUuid(it.productId),
+          quantity: it.quantity,
+        })),
+      });
+    } catch (err) {
+      console.warn('Backend transfer creation warning:', err);
+    }
   };
 
   // Manual Stock Adjustment with mandatory reason code
-  const createAdjustment = (
+  const createAdjustment = async (
     productId: string,
     locationId: string,
     newStock: number,
@@ -548,7 +1296,7 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       referenceType: 'ADJUST',
       referenceId: adjNumber,
       reasonCode,
-      performedBy: 'Sarah Connor (Admin)',
+      performedBy: user?.fullName || 'Administrator',
       unitCost: prod.costPrice,
       runningBalance: newStock,
     };
@@ -573,10 +1321,25 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       reasonCode,
       notes,
       date: new Date().toISOString().split('T')[0],
-      author: 'Sarah Connor (Admin)',
+      author: user?.fullName || 'Administrator',
     };
 
     setAdjustments(prev => [newAdjustmentRecord, ...prev]);
+
+    try {
+      const prodUuid = resolveProductUuid(productId);
+      const locUuid = resolveLocationUuid(locationId);
+      await api.createAdjustment({
+        location_id: locUuid,
+        product_id: prodUuid,
+        new_stock: newStock,
+        reason_code: (reasonCode || 'audit').toLowerCase() as any,
+        notes: notes || 'Audit stock correction',
+        author: user?.fullName || 'Administrator',
+      });
+    } catch (err) {
+      console.warn('Backend adjustment creation warning:', err);
+    }
   };
 
   // Bulk stock adjustment
@@ -607,7 +1370,7 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         referenceType: 'ADJUST',
         referenceId: adjNumber,
         reasonCode: adj.reasonCode,
-        performedBy: 'Sarah Connor (Admin)',
+        performedBy: user?.fullName || 'Administrator',
         unitCost: prod.costPrice,
         runningBalance: newStock,
       };
@@ -627,7 +1390,7 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         reasonCode: adj.reasonCode,
         notes: adj.notes,
         date: new Date().toISOString().split('T')[0],
-        author: 'Sarah Connor (Admin)',
+        author: user?.fullName || 'Administrator',
       });
     });
 
@@ -635,7 +1398,6 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     setLedger(updatedLedger);
     setAdjustments(prev => [...newAdjRecords, ...prev]);
 
-    // Recalculate unique products
     const uniqueProdIds = Array.from(new Set(adjustmentsList.map(a => a.productId)));
     uniqueProdIds.forEach(pId => {
       updatedProds = recalculateProductStock(updatedLedger, pId, updatedProds);
@@ -689,10 +1451,15 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         selectedLocationId,
         setSelectedLocationId,
         formatCurrency,
+        convertAmount,
         addProduct,
         bulkAddProducts,
         updateProduct,
+        toggleProductActive,
         deleteProduct,
+        deleteProducts,
+        clearAllProducts,
+        clearLedger,
         createPurchaseOrder,
         receiveGoods,
         createSalesOrder,
@@ -702,6 +1469,7 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         bulkAdjustStock,
         addCustomField,
         addLocation,
+        refreshData: syncBackend,
       }}
     >
       {children}

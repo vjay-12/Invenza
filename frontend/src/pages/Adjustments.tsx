@@ -1,16 +1,16 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
-  SlidersHorizontal,
-  Plus,
-  Search,
-  AlertTriangle,
-  FileSpreadsheet,
-  ShieldAlert,
-} from 'lucide-react';
+  IconSlidersHorizontal,
+  IconPlus,
+  IconSearch,
+  IconAlertTriangle,
+  IconShieldAlert,
+} from '../components/icons';
 import { useInventory } from '../context/InventoryContext';
 import { AdjustmentReasonCode } from '../types/inventory';
 import { ReasonBadge } from '../components/common/Badge';
 import { Modal } from '../components/common/Modal';
+import { PageMeta } from '../components/common/PageMeta';
 
 export const Adjustments: React.FC = () => {
   const {
@@ -31,75 +31,105 @@ export const Adjustments: React.FC = () => {
   const [reasonCode, setReasonCode] = useState<AdjustmentReasonCode>('audit');
   const [auditNotes, setAuditNotes] = useState('');
 
+  useEffect(() => {
+    if (!locationId && locations[0]) setLocationId(locations[0].id);
+    if (!productId && products[0]) setProductId(products[0].id);
+  }, [locations, products, locationId, productId]);
+
   const selectedProduct = products.find((p) => p.id === productId);
   const currentLocStock = selectedProduct?.locationStock[locationId] || 0;
-  const calculatedDelta = newCountedStock - currentLocStock;
+  const delta = newCountedStock - currentLocStock;
+
+  const handleProductChange = (prodId: string) => {
+    setProductId(prodId);
+    const p = products.find((prod) => prod.id === prodId);
+    if (p) {
+      setNewCountedStock(p.locationStock[locationId] || 0);
+    }
+  };
+
+  const handleLocationChange = (locId: string) => {
+    setLocationId(locId);
+    if (selectedProduct) {
+      setNewCountedStock(selectedProduct.locationStock[locId] || 0);
+    }
+  };
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!productId || !locationId || delta === 0) return;
+
+    createAdjustment(
+      productId,
+      locationId,
+      newCountedStock,
+      reasonCode,
+      auditNotes
+    );
+
+    setIsModalOpen(false);
+    setAuditNotes('');
+  };
 
   const filteredAdjustments = adjustments.filter((adj) => {
-    const q = searchQuery.toLowerCase();
+    const q = searchQuery.toLowerCase().trim();
+    const prod = products.find((p) => p.id === adj.productId);
     const matchesSearch =
+      !q ||
       adj.adjustmentNumber.toLowerCase().includes(q) ||
-      adj.productName.toLowerCase().includes(q) ||
-      adj.sku.toLowerCase().includes(q) ||
-      adj.locationName.toLowerCase().includes(q) ||
-      adj.author.toLowerCase().includes(q);
+      adj.reasonCode.toLowerCase().includes(q) ||
+      (prod && (prod.name.toLowerCase().includes(q) || prod.sku.toLowerCase().includes(q))) ||
+      (adj.author && adj.author.toLowerCase().includes(q));
 
     const matchesReason = reasonFilter === 'all' || adj.reasonCode === reasonFilter;
 
     return matchesSearch && matchesReason;
   });
 
-  const handleSubmitAdjustment = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!productId || !locationId || calculatedDelta === 0) return;
-
-    createAdjustment(productId, locationId, newCountedStock, reasonCode, auditNotes);
-    setIsModalOpen(false);
-    setAuditNotes('');
-  };
-
   return (
     <div className="space-y-6">
+      <PageMeta
+        title="Stock Adjustments & Physical Audits | Invenza Inventory"
+        description="Physical inventory reconciliations, cycle count reconciliations, and scrap adjustments bound to immutable ledger audit records."
+        canonicalPath="/adjustments"
+      />
+
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <div className="flex items-center gap-2">
-            <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">
-              Manual Stock Adjustments & Reconciliation
-            </h1>
-            <span className="rounded-full bg-amber-500/10 px-2.5 py-0.5 text-xs font-bold text-amber-600 dark:text-amber-400 border border-amber-500/20">
-              Mandatory Reason Codes
-            </span>
-          </div>
-          <p className="text-sm text-slate-500 dark:text-slate-400 mt-0.5">
+          <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">
+            Stock Adjustments & Reconciliation
+          </h1>
+          <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
             Record physical inventory variances, scrap, damage, and cycle counts. Every adjustment is
             bound to an immutable audit record and justification note.
           </p>
         </div>
 
         <button
+          type="button"
           onClick={() => {
             const cur = products[0]?.locationStock[locations[0]?.id || ''] || 0;
             setNewCountedStock(cur);
             setIsModalOpen(true);
           }}
-          className="flex items-center gap-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 px-4 py-2 text-xs font-semibold text-white shadow-md shadow-indigo-600/20 transition-colors self-start sm:self-auto"
+          className="flex items-center gap-2 rounded-lg bg-teal-700 hover:bg-teal-800 px-4 py-2 text-xs font-bold text-white shadow-subtle transition-colors self-start sm:self-auto"
         >
-          <Plus className="h-4 w-4" />
+          <IconPlus className="h-4 w-4" />
           Record Stock Adjustment
         </button>
       </div>
 
       {/* Filter toolbar */}
-      <div className="flex flex-col sm:flex-row items-center justify-between gap-3 rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white/70 dark:bg-slate-900/60 p-4 backdrop-blur-xl">
+      <div className="flex flex-col sm:flex-row items-center justify-between gap-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#131924] p-3 shadow-card">
         <div className="relative w-full sm:w-80">
-          <Search className="absolute left-3.5 top-2.5 h-4 w-4 text-slate-400" />
+          <IconSearch className="absolute left-3 top-2.5 h-3.5 w-3.5 text-slate-400" />
           <input
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="Search adjustment #, SKU, reason, author..."
-            className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 pl-9 pr-4 py-2 text-xs text-slate-900 dark:text-white placeholder-slate-400 focus:border-indigo-500 focus:outline-none"
+            className="w-full rounded-lg border border-slate-200 dark:border-slate-800 bg-[#F4F5F8] dark:bg-[#0C1017] pl-8 pr-3 py-1.5 text-xs text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-teal-600"
           />
         </div>
 
@@ -108,11 +138,12 @@ export const Adjustments: React.FC = () => {
           {['all', 'damage', 'loss', 'miscount', 'return', 'audit'].map((r) => (
             <button
               key={r}
+              type="button"
               onClick={() => setReasonFilter(r)}
-              className={`rounded-xl px-3 py-1.5 text-xs font-semibold uppercase whitespace-nowrap transition-all ${
+              className={`rounded-md px-3 py-1 text-xs font-mono font-semibold uppercase whitespace-nowrap transition-colors ${
                 reasonFilter === r
-                  ? 'bg-indigo-600 text-white shadow-sm font-bold'
-                  : 'border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700'
+                  ? 'bg-teal-700 text-white shadow-subtle font-bold'
+                  : 'border border-slate-200 dark:border-slate-800 bg-[#F4F5F8] dark:bg-[#0C1017] text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-800'
               }`}
             >
               {r === 'all' ? 'All Reasons' : r}
@@ -122,103 +153,120 @@ export const Adjustments: React.FC = () => {
       </div>
 
       {/* Adjustments Table */}
-      <div className="overflow-hidden rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white/70 dark:bg-slate-900/60 backdrop-blur-xl">
+      <div className="overflow-hidden rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#131924] shadow-card">
         <div className="overflow-x-auto">
           <table className="w-full text-left text-xs">
             <thead>
-              <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/50 text-slate-500 dark:text-slate-400 uppercase font-semibold text-[10px]">
-                <th className="py-3 px-4">Adjustment #</th>
-                <th className="py-3 px-3">Date</th>
-                <th className="py-3 px-3">Product / SKU</th>
-                <th className="py-3 px-3">Warehouse</th>
-                <th className="py-3 px-3 text-right">Previous</th>
-                <th className="py-3 px-3 text-right">Counted</th>
-                <th className="py-3 px-3 text-right">Variance (Delta)</th>
-                <th className="py-3 px-3">Reason Code</th>
-                <th className="py-3 px-3">Audit Notes</th>
-                <th className="py-3 px-4">Author</th>
+              <tr className="border-b border-slate-200 dark:border-slate-800 bg-[#F6F8FA] dark:bg-[#0C1017] text-slate-600 dark:text-slate-400 uppercase font-semibold text-[10px]">
+                <th className="py-2.5 px-4">Adjustment #</th>
+                <th className="py-2.5 px-3">Date</th>
+                <th className="py-2.5 px-3">Product / SKU</th>
+                <th className="py-2.5 px-3">Warehouse</th>
+                <th className="py-2.5 px-3 text-right">Previous</th>
+                <th className="py-2.5 px-3 text-right">Counted</th>
+                <th className="py-2.5 px-3 text-right">Variance Delta</th>
+                <th className="py-2.5 px-3">Reason Code</th>
+                <th className="py-2.5 px-3">Auditor Notes</th>
+                <th className="py-2.5 px-4">Operator</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60">
-              {filteredAdjustments.map((adj) => (
-                <tr
-                  key={adj.id}
-                  className="hover:bg-slate-50/80 dark:hover:bg-slate-800/50 transition-colors"
-                >
-                  <td className="py-3 px-4 font-mono font-bold text-indigo-600 dark:text-indigo-400">
-                    {adj.adjustmentNumber}
-                  </td>
-                  <td className="py-3 px-3 text-slate-500 dark:text-slate-400 font-mono text-[11px]">
-                    {adj.date}
-                  </td>
-                  <td className="py-3 px-3">
-                    <div className="font-semibold text-slate-800 dark:text-slate-200">
-                      {adj.productName}
+              {filteredAdjustments.length === 0 ? (
+                <tr>
+                  <td colSpan={10} className="py-12 text-center text-slate-400">
+                    <div className="flex flex-col items-center justify-center gap-2">
+                      <IconSlidersHorizontal className="h-8 w-8 text-slate-300 dark:text-slate-600" />
+                      <span className="text-sm font-medium text-slate-500 dark:text-slate-400">
+                        {searchQuery || reasonFilter !== 'all' ? 'No adjustments match your filter criteria.' : 'No stock adjustments recorded yet.'}
+                      </span>
                     </div>
-                    <div className="text-[10px] font-mono text-slate-400">{adj.sku}</div>
-                  </td>
-                  <td className="py-3 px-3 text-slate-700 dark:text-slate-300">
-                    {adj.locationName}
-                  </td>
-                  <td className="py-3 px-3 text-right font-mono text-slate-500">
-                    {adj.previousStock}
-                  </td>
-                  <td className="py-3 px-3 text-right font-mono font-bold text-slate-900 dark:text-white">
-                    {adj.newStock}
-                  </td>
-                  <td className="py-3 px-3 text-right font-mono font-bold">
-                    <span
-                      className={
-                        adj.delta > 0
-                          ? 'text-emerald-600 dark:text-emerald-400'
-                          : 'text-rose-600 dark:text-rose-400'
-                      }
-                    >
-                      {adj.delta > 0 ? `+${adj.delta}` : adj.delta}
-                    </span>
-                  </td>
-                  <td className="py-3 px-3">
-                    <ReasonBadge reason={adj.reasonCode} />
-                  </td>
-                  <td className="py-3 px-3 text-slate-600 dark:text-slate-300 max-w-xs truncate">
-                    {adj.notes}
-                  </td>
-                  <td className="py-3 px-4 text-slate-500 dark:text-slate-400 text-[11px]">
-                    {adj.author}
                   </td>
                 </tr>
-              ))}
+              ) : (
+                filteredAdjustments.map((adj) => {
+                  const prod = products.find((p) => p.id === adj.productId);
+                  const loc = locations.find((l) => l.id === adj.locationId);
+                  const uom = prod?.unitOfMeasure || 'pcs';
+
+                  return (
+                    <tr
+                      key={adj.id}
+                      className="hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors"
+                    >
+                      <td className="py-2.5 px-4 font-mono font-bold text-teal-700 dark:text-teal-400">
+                        {adj.adjustmentNumber}
+                      </td>
+                      <td className="py-2.5 px-3 font-mono text-[11px] text-slate-500 dark:text-slate-400 whitespace-nowrap">
+                        {new Date(adj.date).toLocaleDateString()}
+                      </td>
+                      <td className="py-2.5 px-3">
+                        <div className="font-semibold text-slate-800 dark:text-slate-200">
+                          {prod?.name || 'Product'}
+                        </div>
+                        <div className="text-[10px] font-mono text-slate-400">
+                          {prod?.sku || 'SKU'}
+                        </div>
+                      </td>
+                      <td className="py-2.5 px-3 text-slate-600 dark:text-slate-300">
+                        {loc?.name || 'Warehouse'}
+                      </td>
+                      <td className="py-2.5 px-3 text-right font-mono text-slate-500">
+                        {adj.previousStock} {uom}
+                      </td>
+                      <td className="py-2.5 px-3 text-right font-mono font-bold text-slate-800 dark:text-slate-200">
+                        {adj.newStock} {uom}
+                      </td>
+                      <td className="py-2.5 px-3 text-right font-mono font-bold">
+                        <span
+                          className={
+                            adj.delta > 0
+                              ? 'text-emerald-700 dark:text-emerald-400'
+                              : 'text-rose-700 dark:text-rose-400'
+                          }
+                        >
+                          {adj.delta > 0 ? `+${adj.delta}` : adj.delta} {uom}
+                        </span>
+                      </td>
+                      <td className="py-2.5 px-3">
+                        <ReasonBadge reason={adj.reasonCode} />
+                      </td>
+                      <td className="py-2.5 px-3 text-slate-500 dark:text-slate-400 max-w-[200px] truncate text-[11px]">
+                        {adj.notes || 'Routine physical cycle reconciliation'}
+                      </td>
+                      <td className="py-2.5 px-4 text-slate-600 dark:text-slate-400 text-[11px]">
+                        {adj.author}
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
             </tbody>
           </table>
         </div>
       </div>
 
-      {/* Adjustment Modal */}
+      {/* Record Adjustment Modal */}
       <Modal
         isOpen={isModalOpen}
         onClose={() => setIsModalOpen(false)}
-        title="Record Stock Adjustment"
-        subtitle="Mandatory reason codes and variance justification required for compliance"
+        title="Physical Inventory Adjustment"
+        subtitle="Registers physical count variance into the immutable movement ledger"
         maxWidth="lg"
       >
-        <form onSubmit={handleSubmitAdjustment} className="space-y-4">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                Warehouse Location *
+                Target Facility / Warehouse
               </label>
               <select
                 value={locationId}
-                onChange={(e) => {
-                  setLocationId(e.target.value);
-                  const cur = selectedProduct?.locationStock[e.target.value] || 0;
-                  setNewCountedStock(cur);
-                }}
-                className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-3 py-2 text-xs"
+                onChange={(e) => handleLocationChange(e.target.value)}
+                className="w-full rounded-lg border border-slate-200 dark:border-slate-800 bg-[#F4F5F8] dark:bg-[#131924] px-3 py-2 text-xs focus:outline-none focus:ring-1 focus:ring-teal-600"
               >
                 {locations.map((loc) => (
                   <option key={loc.id} value={loc.id}>
-                    {loc.code} — {loc.name}
+                    {loc.code} : {loc.name}
                   </option>
                 ))}
               </select>
@@ -226,110 +274,128 @@ export const Adjustments: React.FC = () => {
 
             <div>
               <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                Product SKU *
+                Select SKU / Product
               </label>
               <select
                 value={productId}
-                onChange={(e) => {
-                  setProductId(e.target.value);
-                  const p = products.find((item) => item.id === e.target.value);
-                  const cur = p?.locationStock[locationId] || 0;
-                  setNewCountedStock(cur);
-                }}
-                className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-3 py-2 text-xs font-medium"
+                onChange={(e) => handleProductChange(e.target.value)}
+                className="w-full rounded-lg border border-slate-200 dark:border-slate-800 bg-[#F4F5F8] dark:bg-[#131924] px-3 py-2 text-xs focus:outline-none focus:ring-1 focus:ring-teal-600"
               >
-                {products.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.sku} — {p.name}
-                  </option>
-                ))}
+                {products.length === 0 ? (
+                  <option value="" disabled>No products in catalog</option>
+                ) : (
+                  products.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.sku} : {p.name}
+                    </option>
+                  ))
+                )}
               </select>
             </div>
           </div>
 
-          {/* Variance Calculation Card */}
-          <div className="rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/60 p-4">
-            <div className="grid grid-cols-3 gap-3 text-center">
+          {/* Variance Preview Panel */}
+          <div className="rounded-lg border border-slate-200 dark:border-slate-800 bg-[#F4F5F8] dark:bg-[#0C1017] p-3 sm:p-4">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4 text-center">
               <div>
-                <div className="text-[10px] uppercase font-bold text-slate-400">Current Balance</div>
-                <div className="text-base font-mono font-bold text-slate-700 dark:text-slate-300 mt-1">
-                  {currentLocStock}
+                <div className="text-[10px] uppercase font-mono font-bold text-slate-400">
+                  System Recorded Balance
+                </div>
+                <div className="text-lg sm:text-xl font-bold font-mono text-slate-700 dark:text-slate-300 mt-1">
+                  {currentLocStock} {selectedProduct?.unitOfMeasure || 'pcs'}
                 </div>
               </div>
 
-              <div>
-                <div className="text-[10px] uppercase font-bold text-slate-400">Actual Counted</div>
+              <div className="flex flex-col items-center">
+                <div className="text-[10px] uppercase font-mono font-bold text-slate-400">
+                  Physical Count Input
+                </div>
                 <input
                   type="number"
-                  required
+                  min="0"
                   value={newCountedStock}
                   onChange={(e) => setNewCountedStock(parseInt(e.target.value, 10) || 0)}
-                  className="w-20 mx-auto text-center rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 py-1 text-base font-mono font-bold text-indigo-600 dark:text-indigo-400 focus:outline-none"
+                  className="w-28 text-center mx-auto text-lg sm:text-xl font-bold font-mono rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-[#131924] py-1 text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-teal-600 mt-0.5"
                 />
               </div>
 
               <div>
-                <div className="text-[10px] uppercase font-bold text-slate-400">Net Variance</div>
+                <div className="text-[10px] uppercase font-mono font-bold text-slate-400">
+                  Variance Delta
+                </div>
                 <div
-                  className={`text-base font-mono font-bold mt-1 ${
-                    calculatedDelta > 0
-                      ? 'text-emerald-600 dark:text-emerald-400'
-                      : calculatedDelta < 0
-                      ? 'text-rose-600 dark:text-rose-400'
-                      : 'text-slate-400'
+                  className={`text-xl font-bold font-mono mt-1 ${
+                    delta === 0
+                      ? 'text-slate-400'
+                      : delta > 0
+                      ? 'text-emerald-700 dark:text-emerald-400'
+                      : 'text-rose-700 dark:text-rose-400'
                   }`}
                 >
-                  {calculatedDelta > 0 ? `+${calculatedDelta}` : calculatedDelta}
+                  {delta > 0 ? `+${delta}` : delta} {selectedProduct?.unitOfMeasure || 'pcs'}
                 </div>
               </div>
             </div>
           </div>
 
-          <div>
-            <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-              Mandatory Reason Code *
-            </label>
-            <select
-              value={reasonCode}
-              onChange={(e) => setReasonCode(e.target.value as AdjustmentReasonCode)}
-              className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-3 py-2 text-xs font-semibold uppercase"
-            >
-              <option value="audit">AUDIT (Scheduled cycle count reconciliation)</option>
-              <option value="damage">DAMAGE (Damaged in transit / dropped warehouse stock)</option>
-              <option value="loss">LOSS (Unexplained inventory shrinkage)</option>
-              <option value="miscount">MISCOUNT (Previous receiving / order packing error)</option>
-              <option value="return">RETURN (Customer return restocking)</option>
-            </select>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                Reason Code
+              </label>
+              <select
+                value={reasonCode}
+                onChange={(e) => setReasonCode(e.target.value as AdjustmentReasonCode)}
+                className="w-full rounded-lg border border-slate-200 dark:border-slate-800 bg-[#F4F5F8] dark:bg-[#131924] px-3 py-2 text-xs focus:outline-none focus:ring-1 focus:ring-teal-600"
+              >
+                <option value="audit">AUDIT (Routine Cycle Count)</option>
+                <option value="damage">DAMAGE (In-warehouse Damaged Goods)</option>
+                <option value="loss">LOSS (Unaccounted Physical Discrepancy)</option>
+                <option value="miscount">MISCOUNT (Correcting Earlier Typo)</option>
+                <option value="return">RETURN (Customer Return to Active Stock)</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                Auditor / Justification Notes *
+              </label>
+              <input
+                type="text"
+                required
+                value={auditNotes}
+                onChange={(e) => setAuditNotes(e.target.value)}
+                placeholder="Reason for adjustment..."
+                className="w-full rounded-lg border border-slate-200 dark:border-slate-800 bg-[#F4F5F8] dark:bg-[#131924] px-3 py-2 text-xs focus:outline-none focus:ring-1 focus:ring-teal-600"
+              />
+            </div>
           </div>
 
-          <div>
-            <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-              Detailed Audit Justification *
-            </label>
-            <textarea
-              required
-              rows={3}
-              value={auditNotes}
-              onChange={(e) => setAuditNotes(e.target.value)}
-              placeholder="Describe why this adjustment occurred for permanent ledger audit records..."
-              className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-3 py-2 text-xs focus:outline-none"
-            />
-          </div>
+          {delta === 0 && (
+            <div className="flex items-center gap-2 p-2.5 rounded-lg bg-amber-500/10 text-amber-800 dark:text-amber-300 text-xs border border-amber-500/20">
+              <IconAlertTriangle className="h-4 w-4 shrink-0" />
+              <span>Counted quantity matches current system balance. No variance to post.</span>
+            </div>
+          )}
 
           <div className="flex justify-end gap-3 pt-3 border-t border-slate-100 dark:border-slate-800">
             <button
               type="button"
               onClick={() => setIsModalOpen(false)}
-              className="rounded-xl border border-slate-200 dark:border-slate-700 px-4 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300"
+              className="rounded-lg border border-slate-200 dark:border-slate-800 px-4 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
             >
               Cancel
             </button>
             <button
               type="submit"
-              disabled={calculatedDelta === 0}
-              className="rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 px-5 py-2 text-xs font-semibold text-white shadow-md shadow-indigo-600/20"
+              disabled={delta === 0}
+              className={`rounded-lg px-5 py-2 text-xs font-bold text-white shadow-subtle transition-colors ${
+                delta === 0
+                  ? 'bg-slate-400 cursor-not-allowed'
+                  : 'bg-teal-700 hover:bg-teal-800'
+              }`}
             >
-              Commit Adjustment to Ledger
+              Commit Adjustment Record
             </button>
           </div>
         </form>

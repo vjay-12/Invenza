@@ -1,19 +1,37 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap');
-
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 @layer base {
+  html.dark {
+    color-scheme: dark;
+  }
+  html:not(.dark) {
+    color-scheme: light;
+  }
+  select {
+    color-scheme: light;
+  }
+  html.dark select {
+    color-scheme: dark;
+  }
+  select option {
+    background-color: #ffffff;
+    color: #0f172a;
+  }
+  html.dark select option {
+    background-color: #131924;
+    color: #f1f5f9;
+  }
   body {
-    @apply font-sans antialiased text-slate-800 bg-slate-50 dark:bg-[#0B0F19] dark:text-slate-100 transition-colors duration-200;
+    @apply font-sans antialiased text-slate-900 dark:text-slate-100 bg-[#F1F3F7] dark:bg-[#0C1017];
   }
 }
 
-/* Custom modern scrollbar */
+/* Custom architectural scrollbar */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
 }
 
 ::-webkit-scrollbar-track {
@@ -21,37 +39,19 @@
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(156, 163, 175, 0.3);
-  border-radius: 9999px;
+  background: rgba(100, 116, 139, 0.25);
+  border-radius: 4px;
+}
+
+html.dark ::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.35);
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(156, 163, 175, 0.5);
+  background: rgba(100, 116, 139, 0.45);
 }
 
-/* Glassmorphic styles */
-.glass-panel {
-  background: rgba(255, 255, 255, 0.85);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+html.dark ::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.6);
 }
 
-.dark .glass-panel {
-  background: rgba(17, 24, 39, 0.75);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-}
-
-/* Card hover glow */
-.card-hover-effect {
-  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-.card-hover-effect:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 12px 24px -10px rgba(0, 0, 0, 0.08);
-}
-
-.dark .card-hover-effect:hover {
-  box-shadow: 0 12px 24px -10px rgba(0, 0, 0, 0.4);
-}

@@ -1,17 +1,14 @@
 import React, { useState, useRef, useEffect } from 'react';
 import {
-  Sparkles,
-  X,
-  Send,
-  Database,
-  BookOpen,
-  ChevronDown,
-  Minimize2,
-  Bot,
-  User,
-  ExternalLink,
-  Code,
-} from 'lucide-react';
+  IconBot as Bot,
+  IconX as X,
+  IconSend as Send,
+  IconDatabase as Database,
+  IconBookOpen as BookOpen,
+  IconUser as User,
+  IconArrowRight as ExternalLink,
+  IconCode as Code,
+} from '../icons';
 import { useInventory } from '../../context/InventoryContext';
 
 interface ChatMessage {
@@ -27,9 +24,10 @@ interface ChatMessage {
 interface InvenzaChatbotProps {
   isOpen: boolean;
   onClose: () => void;
+  onOpen?: () => void;
 }
 
-export const InvenzaChatbot: React.FC<InvenzaChatbotProps> = ({ isOpen, onClose }) => {
+export const InvenzaChatbot: React.FC<InvenzaChatbotProps> = ({ isOpen, onClose, onOpen }) => {
   const { products, locations, purchaseOrders } = useInventory();
   const [input, setInput] = useState('');
   const [isTyping, setIsTyping] = useState(false);
@@ -40,8 +38,8 @@ export const InvenzaChatbot: React.FC<InvenzaChatbotProps> = ({ isOpen, onClose 
       id: 'welcome-1',
       role: 'assistant',
       content:
-        "Greetings! I'm your **Invenza AI Copilot**. I have dual-engine intelligence: I can run read-only **Text-to-SQL** queries across your live stock ledger (`query_inventory_db`) or search inventory SOPs & valuation algorithms (`search_docs`).\n\nTry asking me what's low on stock or how our FIFO ledger works!",
-      timestamp: 'Just now',
+        "Hello! I am **Invenza Copilot**, your enterprise inventory assistant. I can execute live queries against the double-entry movement ledger, check warehouse stock thresholds, or explain accounting rules (FIFO vs Weighted Average).",
+      timestamp: 'Now',
     },
   ]);
 
@@ -50,44 +48,30 @@ export const InvenzaChatbot: React.FC<InvenzaChatbotProps> = ({ isOpen, onClose 
   };
 
   useEffect(() => {
-    if (isOpen) {
-      scrollToBottom();
-    }
-  }, [messages, isOpen]);
-
-  const samplePrompts = [
-    "What items are low on stock in Central Hub?",
-    "How does FIFO stock valuation work?",
-    "Show pending purchase orders",
-    "What is the total valuation of electronics?",
-  ];
+    scrollToBottom();
+  }, [messages, isTyping]);
 
   const handleSend = (textToSend?: string) => {
-    const text = textToSend || input;
-    if (!text.trim()) return;
+    const query = textToSend || input;
+    if (!query.trim()) return;
 
     const userMsg: ChatMessage = {
-      id: `msg-${Date.now()}`,
+      id: `user-${Date.now()}`,
       role: 'user',
-      content: text,
+      content: query,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     };
 
     setMessages((prev) => [...prev, userMsg]);
-    if (!textToSend) setInput('');
+    setInput('');
     setIsTyping(true);
 
-    // Simulate intelligent orchestrator response with realistic tool-use routing
+    // Simulated Copilot Orchestration
     setTimeout(() => {
-      const lower = text.toLowerCase();
+      const lower = query.toLowerCase();
       let reply: ChatMessage;
 
-      if (
-        lower.includes('low') ||
-        lower.includes('reorder') ||
-        lower.includes('central hub') ||
-        lower.includes('stock')
-      ) {
+      if (lower.includes('low stock') || lower.includes('reorder') || lower.includes('out of stock')) {
         const lowItems = products.filter((p) => p.currentStock <= p.reorderPoint);
         const count = lowItems.length;
 
@@ -99,7 +83,7 @@ export const InvenzaChatbot: React.FC<InvenzaChatbotProps> = ({ isOpen, onClose 
               (p) =>
                 `• **${p.name}** (\`${p.sku}\`): **${p.currentStock} ${p.unitOfMeasure}** in stock (Reorder Point: ${p.reorderPoint})`
             )
-            .join('\n')}\n\n💡 *Actionable insight*: Purchase Order \`PO-2026-005\` has already been created for AeroCraft Industrial Supplies to replenish these units.`,
+            .join('\n')}\n\n*Actionable insight*: Purchase Order \`PO-2026-005\` has already been created for AeroCraft Industrial Supplies to replenish these units.`,
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
           toolInvoked: 'query_inventory_db',
           sqlQuery:
@@ -124,7 +108,7 @@ export const InvenzaChatbot: React.FC<InvenzaChatbotProps> = ({ isOpen, onClose 
         reply = {
           id: `reply-${Date.now()}`,
           role: 'assistant',
-          content: `You currently have **${purchaseOrders.length} Purchase Orders** on file.\n\n• **PO-2026-005** (AeroCraft): Pending delivery to Central Hub ($3,135.00)\n• **PO-2026-004** (OmniDesk): Fully received with auto-written GRN movements ($170.00)`,
+          content: `You currently have **${purchaseOrders.length} Purchase Orders** on file.\n\n• **PO-2026-005** (AeroCraft): Pending delivery to Central Hub (₹3,135.00)\n• **PO-2026-004** (OmniDesk): Fully received with auto-written GRN movements (₹170.00)`,
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
           toolInvoked: 'query_inventory_db',
           sqlQuery: 'SELECT po_number, supplier_name, status, total_amount FROM purchase_orders WHERE tenant_id = :tenant_id ORDER BY order_date DESC LIMIT 5;',
@@ -147,46 +131,42 @@ export const InvenzaChatbot: React.FC<InvenzaChatbotProps> = ({ isOpen, onClose 
   if (!isOpen) {
     return (
       <button
-        onClick={onClose}
-        className="fixed bottom-6 right-6 z-40 flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-tr from-indigo-600 via-indigo-500 to-purple-600 text-white shadow-xl shadow-indigo-500/30 hover:shadow-indigo-500/50 hover:scale-105 active:scale-95 transition-all group"
+        type="button"
+        onClick={onOpen || onClose}
+        className="fixed bottom-12 sm:bottom-14 right-6 z-40 flex h-12 w-12 items-center justify-center rounded-xl bg-teal-700 hover:bg-teal-800 text-white shadow-card transition-colors"
         aria-label="Open Invenza AI Assistant"
       >
-        <Sparkles className="h-6 w-6 animate-pulse text-white group-hover:rotate-12 transition-transform" />
-        <span className="absolute -top-1 -right-1 flex h-4 w-4">
-          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75"></span>
-          <span className="relative inline-flex rounded-full h-4 w-4 bg-indigo-500"></span>
-        </span>
+        <Bot className="h-6 w-6 text-white" />
       </button>
     );
   }
 
   return (
-    <div className="fixed bottom-6 right-6 z-50 flex h-[620px] w-96 max-w-[calc(100vw-2rem)] flex-col rounded-2xl border border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-slate-900/95 shadow-2xl backdrop-blur-xl overflow-hidden transition-all animate-in fade-in slide-in-from-bottom-5">
+    <div className="fixed bottom-12 sm:bottom-14 right-3 sm:right-6 z-50 flex h-[min(620px,calc(100vh-5rem))] w-96 max-w-[calc(100vw-1.5rem)] sm:max-w-[calc(100vw-2rem)] flex-col rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#131924] shadow-modal overflow-hidden transition-all">
       {/* Header */}
-      <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 bg-gradient-to-r from-indigo-600/10 via-purple-600/10 to-transparent px-4 py-3.5">
+      <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 bg-[#F4F5F8] dark:bg-[#0C1017] px-4 py-3">
         <div className="flex items-center gap-2.5">
-          <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-indigo-600 text-white shadow-glow-brand">
-            <Sparkles className="h-4 w-4" />
+          <div className="flex h-7 w-7 items-center justify-center rounded bg-teal-700 text-white">
+            <Bot className="h-4 w-4" />
           </div>
           <div>
             <div className="flex items-center gap-1.5">
-              <span className="text-sm font-bold text-slate-900 dark:text-white">Invenza Copilot</span>
-              <span className="rounded-full bg-indigo-500/10 dark:bg-indigo-500/20 px-1.5 py-0.2 text-[10px] font-bold text-indigo-600 dark:text-indigo-400">
+              <span className="text-xs font-bold text-slate-900 dark:text-white">Invenza Copilot</span>
+              <span className="rounded bg-teal-500/10 px-1.5 py-0.2 font-mono text-[9px] font-bold text-teal-700 dark:text-teal-400">
                 v1.0
               </span>
             </div>
-            <div className="text-[10px] text-slate-400">Orchestrator: Text-to-SQL + pgvector RAG</div>
+            <div className="text-[10px] text-slate-400 font-mono">Text-to-SQL + pgvector RAG</div>
           </div>
         </div>
 
-        <div className="flex items-center gap-1">
-          <button
-            onClick={onClose}
-            className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-600 dark:hover:text-slate-200 transition-colors"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          className="rounded p-1 text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-800 hover:text-slate-700 dark:hover:text-slate-200 transition-colors"
+        >
+          <X className="h-4 w-4" />
+        </button>
       </div>
 
       {/* Messages Feed */}
@@ -197,15 +177,15 @@ export const InvenzaChatbot: React.FC<InvenzaChatbotProps> = ({ isOpen, onClose 
             className={`flex flex-col ${msg.role === 'user' ? 'items-end' : 'items-start'}`}
           >
             <div
-              className={`max-w-[88%] rounded-2xl p-3.5 ${
+              className={`max-w-[88%] rounded-lg p-3 ${
                 msg.role === 'user'
-                  ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/20 rounded-br-none'
-                  : 'bg-slate-100 dark:bg-slate-800/90 text-slate-800 dark:text-slate-100 border border-slate-200/80 dark:border-slate-700/60 rounded-bl-none'
+                  ? 'bg-teal-700 text-white rounded-br-none'
+                  : 'bg-slate-100 dark:bg-[#0C1017] text-slate-800 dark:text-slate-200 border border-slate-200 dark:border-slate-800 rounded-bl-none'
               }`}
             >
               {/* Tool Execution Badge */}
               {msg.toolInvoked && (
-                <div className="mb-2 flex items-center gap-1.5 rounded-lg bg-indigo-500/10 px-2 py-1 text-[11px] font-semibold text-indigo-600 dark:text-indigo-400 border border-indigo-500/20">
+                <div className="mb-2 flex items-center gap-1.5 rounded bg-teal-500/10 px-2 py-1 text-[10px] font-mono font-bold text-teal-800 dark:text-teal-300 border border-teal-500/20">
                   {msg.toolInvoked === 'query_inventory_db' ? (
                     <>
                       <Database className="h-3 w-3" />
@@ -225,7 +205,7 @@ export const InvenzaChatbot: React.FC<InvenzaChatbotProps> = ({ isOpen, onClose 
 
               {/* SQL Inspector Card */}
               {msg.sqlQuery && (
-                <div className="mt-2.5 rounded-lg bg-slate-900 p-2 text-[10px] font-mono text-emerald-400 border border-slate-700 overflow-x-auto">
+                <div className="mt-2.5 rounded bg-black/40 p-2 text-[10px] font-mono text-emerald-400 border border-slate-700 overflow-x-auto">
                   <div className="flex items-center gap-1 text-[9px] text-slate-400 uppercase font-sans mb-1">
                     <Code className="h-2.5 w-2.5" /> Executed Tenant-Safe SELECT Query
                   </div>
@@ -235,38 +215,45 @@ export const InvenzaChatbot: React.FC<InvenzaChatbotProps> = ({ isOpen, onClose 
 
               {/* Citation */}
               {msg.docCitation && (
-                <div className="mt-2 flex items-center gap-1 text-[10px] text-indigo-500 dark:text-indigo-400 italic">
+                <div className="mt-2 flex items-center gap-1 text-[10px] text-teal-600 dark:text-teal-400 italic">
                   <ExternalLink className="h-3 w-3" /> Source: {msg.docCitation}
                 </div>
               )}
             </div>
-            <span className="mt-1 text-[10px] text-slate-400 px-1">{msg.timestamp}</span>
+
+            <span className="mt-1 px-1 text-[10px] font-mono text-slate-400">
+              {msg.timestamp}
+            </span>
           </div>
         ))}
 
         {isTyping && (
-          <div className="flex items-center gap-2 rounded-2xl bg-slate-100 dark:bg-slate-800 p-3 max-w-[120px]">
-            <Bot className="h-4 w-4 text-indigo-500 animate-spin" />
-            <span className="text-xs text-slate-500">Thinking...</span>
+          <div className="flex items-center gap-2 text-xs text-slate-400 italic">
+            <Bot className="h-3.5 w-3.5 animate-spin text-teal-600" />
+            <span>Consulting database schema & ledger...</span>
           </div>
         )}
-
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Suggested Prompts */}
-      <div className="px-3 py-2 border-t border-slate-100 dark:border-slate-800/80 bg-slate-50/50 dark:bg-slate-950/50">
-        <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
-          Quick Insights
+      {/* Suggested Quick Prompts */}
+      <div className="border-t border-slate-100 dark:border-slate-800 p-2.5 bg-[#F4F5F8] dark:bg-[#0C1017]">
+        <div className="text-[10px] uppercase font-mono font-bold text-slate-400 mb-1.5">
+          Suggested Audit Queries
         </div>
-        <div className="flex gap-1.5 overflow-x-auto pb-1 no-scrollbar">
-          {samplePrompts.map((p, i) => (
+        <div className="flex flex-wrap gap-1.5">
+          {[
+            'Which SKUs are below reorder threshold?',
+            'Explain FIFO costing vs Weighted Avg',
+            'Pending Purchase Orders summary',
+          ].map((prompt, idx) => (
             <button
-              key={i}
-              onClick={() => handleSend(p)}
-              className="shrink-0 rounded-full border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2.5 py-1 text-[11px] text-slate-600 dark:text-slate-300 hover:border-indigo-500 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors"
+              key={idx}
+              type="button"
+              onClick={() => handleSend(prompt)}
+              className="rounded border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#131924] px-2 py-1 text-[10px] text-slate-600 dark:text-slate-300 hover:border-teal-600 hover:text-teal-700 dark:hover:text-teal-400 transition-colors"
             >
-              {p}
+              {prompt}
             </button>
           ))}
         </div>
@@ -278,21 +265,22 @@ export const InvenzaChatbot: React.FC<InvenzaChatbotProps> = ({ isOpen, onClose 
           e.preventDefault();
           handleSend();
         }}
-        className="flex items-center gap-2 border-t border-slate-200 dark:border-slate-800 p-3 bg-white dark:bg-slate-900"
+        className="border-t border-slate-200 dark:border-slate-800 p-3 bg-white dark:bg-[#131924] flex items-center gap-2"
       >
         <input
           type="text"
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          placeholder="Ask Invenza Copilot anything..."
-          className="flex-1 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/90 px-3 py-2.5 text-xs text-slate-900 dark:text-white placeholder-slate-400 focus:border-indigo-500 focus:outline-none"
+          placeholder="Ask Copilot about SKUs, stock levels, ledgers..."
+          className="flex-1 rounded-lg border border-slate-200 dark:border-slate-800 bg-[#F4F5F8] dark:bg-[#0C1017] px-3 py-2 text-xs text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-teal-600"
         />
         <button
           type="submit"
-          disabled={!input.trim()}
-          className="flex h-9 w-9 items-center justify-center rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white shadow-md shadow-indigo-600/20 transition-all"
+          disabled={!input.trim() || isTyping}
+          className="flex h-8 w-8 items-center justify-center rounded-lg bg-teal-700 hover:bg-teal-800 text-white disabled:opacity-50 transition-colors"
+          aria-label="Send query"
         >
-          <Send className="h-4 w-4" />
+          <Send className="h-3.5 w-3.5" />
         </button>
       </form>
     </div>

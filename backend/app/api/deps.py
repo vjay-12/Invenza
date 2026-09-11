@@ -52,7 +52,7 @@ async def get_current_user(
     if user.role != UserRole.SUPER_ADMIN.value and user.role != "super_admin":
         tenant_res = await db.execute(select(Tenant).where(Tenant.id == user.tenant_id))
         tenant = tenant_res.scalar_one_or_none()
-        if tenant and not tenant.is_active:
+        if tenant and (not tenant.is_active or getattr(tenant, "is_archived", False)):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Company account '{tenant.name}' has been deactivated by the system administrator.",

@@ -1,246 +1,917 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
-  Settings as SettingsIcon,
-  Sliders,
-  Shield,
-  Webhook,
-  DollarSign,
-  Plus,
-  Trash2,
-  Check,
-  Globe,
-  Radio,
-} from 'lucide-react';
+  IconSettings,
+  IconSlidersHorizontal,
+  IconShieldCheck,
+  IconWebhook,
+  IconPlus,
+  IconTrash2,
+  IconCheck,
+  IconGlobe,
+  IconRadio,
+  IconAlertTriangle,
+  IconFileText,
+  IconBuilding,
+  IconFileUp,
+  IconLock,
+  IconMail,
+  IconEye,
+  IconEyeOff,
+  IconClock,
+  IconCopy,
+  IconRefreshCw,
+  IconAlertCircle,
+} from '../components/icons';
 import { useInventory } from '../context/InventoryContext';
-import { CustomFieldDefinition, CurrencyCode } from '../types/inventory';
+import { useAuth } from '../context/AuthContext';
+import { CustomFieldDefinition } from '../types/inventory';
 import { Modal } from '../components/common/Modal';
+import { PageMeta } from '../components/common/PageMeta';
+import { api } from '../services/api';
 
 export const Settings: React.FC = () => {
-  const { customFields, addCustomField, currency, setCurrency } = useInventory();
+  const { user, isSuperAdmin } = useAuth();
+  const {
+    customFields,
+    addCustomField,
+    products,
+    purchaseOrders,
+    salesOrders,
+    ledger,
+    clearAllProducts,
+    clearLedger,
+  } = useInventory();
 
-  // Custom Field Form
-  const [isModalOpen, setIsModalOpen] = useState(false);
+  // Danger Zone Multi-Step Verification Modal State
+  const [dangerModal, setDangerModal] = useState<{
+    isOpen: boolean;
+    type: 'catalog' | 'ledger';
+    title: string;
+    description: string;
+    itemCount: number;
+  }>({
+    isOpen: false,
+    type: 'catalog',
+    title: '',
+    description: '',
+    itemCount: 0,
+  });
+
+  const [dangerPassword, setDangerPassword] = useState('');
+  const [showDangerPassword, setShowDangerPassword] = useState(false);
+  const [dangerOtp, setDangerOtp] = useState('');
+  const [isSendingOtp, setIsSendingOtp] = useState(false);
+  const [otpSent, setOtpSent] = useState(false);
+  const [otpCountdown, setOtpCountdown] = useState(0);
+  const [isExecutingDanger, setIsExecutingDanger] = useState(false);
+  const [dangerError, setDangerError] = useState<string | null>(null);
+  const [dangerSuccess, setDangerSuccess] = useState<string | null>(null);
+  const [pendingPurgeRequest, setPendingPurgeRequest] = useState<any | null>(null);
+  const [isProcessingApproval, setIsProcessingApproval] = useState(false);
+
+  // Countdown timer for OTP
+  useEffect(() => {
+    let timer: any;
+    if (otpCountdown > 0) {
+      timer = setInterval(() => setOtpCountdown((c) => c - 1), 1000);
+    }
+    return () => clearInterval(timer);
+  }, [otpCountdown]);
+
+  // Load existing pending ledger purge requests
+  const loadPurgeRequests = async () => {
+    try {
+      const list = await api.getLedgerPurgeRequests();
+      if (list && list.length > 0) {
+        const pending = list.find((r: any) => r.status === 'pending_super_admin_approval');
+        setPendingPurgeRequest(pending || null);
+      } else {
+        setPendingPurgeRequest(null);
+      }
+    } catch (err) {
+      console.warn('Could not load purge requests:', err);
+    }
+  };
+
+  useEffect(() => {
+    loadPurgeRequests();
+  }, []);
+
+  const openDangerModal = (type: 'catalog' | 'ledger') => {
+    const isCatalog = type === 'catalog';
+    setDangerModal({
+      isOpen: true,
+      type,
+      title: isCatalog
+        ? 'Identity Verification: Reset Product Catalog'
+        : 'High-Security Dual-Authorization: Purge Movement Ledger',
+      description: isCatalog
+        ? `Permanently deletes all ${products.length} SKU items and stock allocations. Requires account password and registered email verification code.`
+        : `CRITICAL ACTION: Requires account password, registered email verification code, AND explicit Super Admin authorization before any data is purged.`,
+      itemCount: isCatalog ? products.length : ledger.length,
+    });
+    setDangerPassword('');
+    setShowDangerPassword(false);
+    setDangerOtp('');
+    setOtpSent(false);
+    setOtpCountdown(0);
+    setDangerError(null);
+    setDangerSuccess(null);
+  };
+
+  const handleSendDangerOtp = async () => {
+    setIsSendingOtp(true);
+    setDangerError(null);
+    try {
+      const action = dangerModal.type === 'catalog' ? 'clear_catalog' : 'clear_ledger';
+      await api.sendDangerZoneOtp(action, user?.email);
+      setOtpSent(true);
+      setOtpCountdown(60);
+    } catch (err: any) {
+      setDangerError(err.message || 'Failed to dispatch verification code.');
+    } finally {
+      setIsSendingOtp(false);
+    }
+  };
+
+  const handleExecuteDangerAction = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!dangerPassword) {
+      setDangerError('Please enter your account password.');
+      return;
+    }
+    if (!dangerOtp || dangerOtp.trim().length !== 6) {
+      setDangerError('Please enter the 6-digit verification code sent to your email.');
+      return;
+    }
+
+    setIsExecutingDanger(true);
+    setDangerError(null);
+
+    try {
+      if (dangerModal.type === 'catalog') {
+        await clearAllProducts({
+          password: dangerPassword,
+          otp: dangerOtp.trim(),
+          performedBy: user?.fullName ? `${user.fullName} (${user.email})` : 'Administrator',
+        });
+        setDangerSuccess(
+          `Product Catalog cleared. All ${dangerModal.itemCount} items were deleted, and a verified audit entry was logged to the Movement Ledger.`
+        );
+        setTimeout(() => {
+          setDangerModal((prev) => ({ ...prev, isOpen: false }));
+          setDangerSuccess(null);
+        }, 2200);
+      } else if (dangerModal.type === 'ledger') {
+        const res = await api.requestLedgerPurge(
+          dangerPassword,
+          dangerOtp.trim(),
+          'Comprehensive administrative audit reset',
+          user?.email
+        );
+        setPendingPurgeRequest(res);
+        setDangerSuccess(
+          `Identity verified via Password + OTP! Request ${res.request_id || ''} has been submitted for Super Admin review. The Movement Ledger remains locked and untouched until Super Admin approval.`
+        );
+        loadPurgeRequests();
+        setTimeout(() => {
+          setDangerModal((prev) => ({ ...prev, isOpen: false }));
+          setDangerSuccess(null);
+        }, 3200);
+      }
+    } catch (err: any) {
+      setDangerError(err.message || 'Verification failed. Please check your credentials and OTP.');
+    } finally {
+      setIsExecutingDanger(false);
+    }
+  };
+
+  const handleSuperAdminDirectApprove = async (requestId: string) => {
+    setIsProcessingApproval(true);
+    try {
+      await api.approveLedgerPurge(requestId);
+      await clearLedger({
+        requestedBy: pendingPurgeRequest?.requested_by_name || 'Admin',
+        approvedBy: user?.fullName ? `${user.fullName} (${user.email})` : 'Super Administrator',
+      });
+      setPendingPurgeRequest(null);
+      loadPurgeRequests();
+    } catch (err: any) {
+      alert(err.message || 'Failed to approve purge request');
+    } finally {
+      setIsProcessingApproval(false);
+    }
+  };
+
+  // GST & Invoicing Profile State
+  const [gstSettings, setGstSettings] = useState({
+    legal_business_name: '',
+    gstin: '',
+    pan: '',
+    registered_address: '',
+    state: 'Karnataka',
+    state_code: '29',
+    authorized_signatory_name: '',
+    bank_name: '',
+    bank_account_number: '',
+    bank_ifsc_code: '',
+    bank_branch: '',
+    account_holder_name: '',
+    invoice_prefix: 'INV',
+    auto_email_invoice: false,
+    logo_url: '',
+    signature_url: '',
+  });
+  const [isLoadingGst, setIsLoadingGst] = useState(true);
+  const [isSavingGst, setIsSavingGst] = useState(false);
+  const [gstSaveSuccess, setGstSaveSuccess] = useState(false);
+
+  useEffect(() => {
+    const loadGstSettings = async () => {
+      try {
+        const data = await api.getTenantInvoicingSettings();
+        if (data) {
+          setGstSettings({
+            legal_business_name: data.legal_business_name || '',
+            gstin: data.gstin || '',
+            pan: data.pan || '',
+            registered_address: data.registered_address || '',
+            state: data.state || 'Karnataka',
+            state_code: data.state_code || '29',
+            authorized_signatory_name: data.authorized_signatory_name || '',
+            bank_name: data.bank_name || '',
+            bank_account_number: data.bank_account_number || '',
+            bank_ifsc_code: data.bank_ifsc_code || '',
+            bank_branch: data.bank_branch || '',
+            account_holder_name: data.account_holder_name || '',
+            invoice_prefix: data.invoice_prefix || 'INV',
+            auto_email_invoice: Boolean(data.auto_email_invoice),
+            logo_url: data.logo_url || '',
+            signature_url: data.signature_url || '',
+          });
+        }
+      } catch (err) {
+        console.error('Failed to load GST settings:', err);
+      } finally {
+        setIsLoadingGst(false);
+      }
+    };
+    loadGstSettings();
+  }, []);
+
+  const handleSaveGstSettings = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsSavingGst(true);
+    setGstSaveSuccess(false);
+    try {
+      await api.updateTenantInvoicingSettings(gstSettings);
+      setGstSaveSuccess(true);
+      setTimeout(() => setGstSaveSuccess(false), 4000);
+    } catch (err) {
+      console.error('Failed to update GST settings:', err);
+    } finally {
+      setIsSavingGst(false);
+    }
+  };
+
+  // Custom Field Form State
   const [fieldName, setFieldName] = useState('');
   const [fieldKey, setFieldKey] = useState('');
   const [fieldType, setFieldType] = useState<'text' | 'number' | 'date' | 'select'>('text');
-  const [optionsStr, setOptionsStr] = useState('');
+  const [fieldOptions, setFieldOptions] = useState('');
+  const [isRequired, setIsRequired] = useState(false);
 
-  // Outbound webhooks state
+  // Webhooks simulated state
   const [webhooks, setWebhooks] = useState([
-    {
-      id: 'wh-1',
-      url: 'https://api.company-erp.internal/webhooks/invenza',
-      events: ['stock.movement', 'stock.low'],
-      isActive: true,
-    },
-    {
-      id: 'wh-2',
-      url: 'https://hooks.slack.com/services/T00/B00/XXXX',
-      events: ['stock.low'],
-      isActive: true,
-    },
+    { id: '1', url: 'https://api.invenza.internal/webhooks/sap-stock-sync', events: ['ledger.in', 'ledger.out'] },
   ]);
-
   const [newWebhookUrl, setNewWebhookUrl] = useState('');
 
-  const handleCreateCustomField = (e: React.FormEvent) => {
+  const handleCreateField = (e: React.FormEvent) => {
     e.preventDefault();
     if (!fieldName || !fieldKey) return;
 
-    const options =
-      fieldType === 'select'
-        ? optionsStr.split(',').map((s) => s.trim()).filter(Boolean)
-        : undefined;
-
-    addCustomField({
+    const newField: CustomFieldDefinition = {
+      id: `cf-${Date.now()}`,
       name: fieldName,
-      key: fieldKey.trim(),
+      key: fieldKey.toLowerCase().replace(/\s+/g, '_'),
       type: fieldType,
-      options,
-      required: false,
-    });
+      required: isRequired,
+      options: fieldType === 'select' ? fieldOptions.split(',').map((o) => o.trim()) : undefined,
+    };
 
-    setIsModalOpen(false);
+    addCustomField(newField);
     setFieldName('');
     setFieldKey('');
-    setOptionsStr('');
+    setFieldOptions('');
+    setIsRequired(false);
   };
 
   const handleAddWebhook = (e: React.FormEvent) => {
     e.preventDefault();
     if (!newWebhookUrl) return;
-
     setWebhooks((prev) => [
       ...prev,
-      {
-        id: `wh-${Date.now()}`,
-        url: newWebhookUrl,
-        events: ['stock.low', 'stock.movement'],
-        isActive: true,
-      },
+      { id: Date.now().toString(), url: newWebhookUrl, events: ['ledger.all'] },
     ]);
     setNewWebhookUrl('');
   };
 
   return (
-    <div className="space-y-8 max-w-5xl">
-      {/* Header */}
+    <div className="max-w-5xl mx-auto space-y-6 pb-12">
+      <PageMeta
+        title="Settings & JSONB Custom Schema | Invenza Inventory"
+        description="Configure company legal profile, GST invoicing parameters, bank remittance details, dynamic JSONB SKU schema, and system security."
+        canonicalPath="/settings"
+      />
+
+      {/* Page Header */}
       <div>
         <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">
-          System Settings & Customization Engine
+          System Settings & Custom Schema Engine
         </h1>
-        <p className="text-sm text-slate-500 dark:text-slate-400 mt-0.5">
-          Configure JSONB dynamic product schemas, user roles, outbound event webhooks, and
-          formatting.
+        <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+          Configure organization legal & tax parameters, bank remittance, extensible JSONB product attributes, and system security.
         </p>
       </div>
 
-      {/* 1. Dynamic Custom Fields Engine */}
-      <div className="rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white/70 dark:bg-slate-900/60 p-6 backdrop-blur-xl">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 dark:border-slate-800 pb-4">
+      {/* 1. Company GST & Invoicing Profile */}
+      <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#131924] p-5 sm:p-6 shadow-card">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 dark:border-slate-800 pb-4">
           <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-500/10 text-indigo-600 dark:text-indigo-400">
-              <Sliders className="h-5 w-5" />
+            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-teal-500/10 text-teal-700 dark:text-teal-400 border border-teal-500/20 shrink-0">
+              <IconBuilding className="h-5 w-5" />
             </div>
             <div>
-              <h2 className="text-base font-bold text-slate-900 dark:text-white">
-                Dynamic Product Custom Fields (JSONB)
+              <h2 className="text-sm font-bold text-slate-900 dark:text-white">
+                Company Legal Profile & GST Invoicing
               </h2>
               <p className="text-xs text-slate-500 dark:text-slate-400">
-                Addresses "Limited Customization". Define bespoke fields for any industry (lot
-                tracking, expiry, warehouse zone).
+                Mandatory legal parameters, 15-digit GSTIN, state code, and bank remittance for tax-compliant invoices.
               </p>
             </div>
           </div>
 
-          <button
-            onClick={() => setIsModalOpen(true)}
-            className="flex items-center gap-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 px-3.5 py-2 text-xs font-semibold text-white transition-colors"
-          >
-            <Plus className="h-4 w-4" />
-            Add Custom Field
-          </button>
+          {gstSaveSuccess && (
+            <div className="flex items-center gap-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 px-3 py-1 text-xs font-bold text-emerald-700 dark:text-emerald-400 animate-fadeIn self-start sm:self-auto shrink-0">
+              <IconCheck className="h-3.5 w-3.5" />
+              <span>Settings Saved!</span>
+            </div>
+          )}
         </div>
 
-        {/* Existing Custom Fields */}
-        <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-4">
-          {customFields.map((cf) => (
-            <div
-              key={cf.id}
-              className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/40 p-4"
-            >
-              <div className="flex items-center justify-between">
-                <span className="font-bold text-xs text-slate-800 dark:text-slate-200">
-                  {cf.name}
-                </span>
-                <span className="rounded bg-indigo-500/10 px-2 py-0.5 text-[10px] font-mono font-bold uppercase text-indigo-600 dark:text-indigo-400">
-                  {cf.type}
-                </span>
-              </div>
-              <div className="mt-1 font-mono text-[11px] text-slate-400">key: {cf.key}</div>
-              {cf.options && (
-                <div className="mt-2 text-[10px] text-slate-500">
-                  Options: {cf.options.join(', ')}
-                </div>
-              )}
+        <form onSubmit={handleSaveGstSettings} className="mt-6 space-y-6">
+          {/* Sub-block 1: Company Legal Identity & Tax Registration */}
+          <div className="space-y-3">
+            <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800/80 pb-2">
+              <span className="text-[11px] font-bold uppercase tracking-wider text-teal-700 dark:text-teal-400 font-mono">
+                Enterprise Legal Identity & Tax Registration
+              </span>
+              <span className="text-[10px] text-slate-400 dark:text-slate-500">
+                Required for GST e-Invoicing compliance
+              </span>
             </div>
-          ))}
-        </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-6 gap-4">
+              {/* Legal Business Name */}
+              <div className="md:col-span-4">
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
+                  Legal Business Name *
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={gstSettings.legal_business_name}
+                  onChange={(e) => setGstSettings({ ...gstSettings, legal_business_name: e.target.value })}
+                  placeholder="e.g. Invenza Global Technologies Ltd"
+                  className="w-full h-9 rounded-lg border border-slate-200 dark:border-slate-800 bg-[#F4F5F8] dark:bg-[#0C1017] px-3 py-2 text-xs text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-teal-600 transition-colors"
+                />
+              </div>
+
+              {/* PAN */}
+              <div className="md:col-span-2">
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
+                  Permanent Account Number (PAN) *
+                </label>
+                <input
+                  type="text"
+                  required
+                  maxLength={10}
+                  value={gstSettings.pan}
+                  onChange={(e) => setGstSettings({ ...gstSettings, pan: e.target.value.toUpperCase() })}
+                  placeholder="AABCI1234F"
+                  className="w-full h-9 rounded-lg border border-slate-200 dark:border-slate-800 bg-[#F4F5F8] dark:bg-[#0C1017] px-3 py-2 text-xs font-mono uppercase text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-teal-600 transition-colors"
+                />
+              </div>
+
+              {/* Company GSTIN */}
+              <div className="md:col-span-3">
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
+                  Company GSTIN (15 Digits) *
+                </label>
+                <input
+                  type="text"
+                  required
+                  maxLength={15}
+                  value={gstSettings.gstin}
+                  onChange={(e) => {
+                    const val = e.target.value.toUpperCase();
+                    setGstSettings({
+                      ...gstSettings,
+                      gstin: val,
+                      state_code: val.length >= 2 ? val.slice(0, 2) : gstSettings.state_code,
+                    });
+                  }}
+                  placeholder="29AABCI1234F1Z5"
+                  className="w-full h-9 rounded-lg border border-slate-200 dark:border-slate-800 bg-[#F4F5F8] dark:bg-[#0C1017] px-3 py-2 text-xs font-mono uppercase text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-teal-600 transition-colors"
+                />
+              </div>
+
+              {/* State & GST State Code */}
+              <div className="md:col-span-3">
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
+                  State & GST State Code *
+                </label>
+                <select
+                  value={gstSettings.state_code}
+                  onChange={(e) => {
+                    const sc = e.target.value;
+                    const stateMap: Record<string, string> = {
+                      '29': 'Karnataka',
+                      '33': 'Tamil Nadu',
+                      '27': 'Maharashtra',
+                      '07': 'Delhi',
+                      '36': 'Telangana',
+                      '24': 'Gujarat',
+                      '32': 'Kerala',
+                      '19': 'West Bengal',
+                    };
+                    setGstSettings({
+                      ...gstSettings,
+                      state_code: sc,
+                      state: stateMap[sc] || 'Karnataka',
+                    });
+                  }}
+                  className="w-full h-9 rounded-lg border border-slate-200 dark:border-slate-800 bg-[#F4F5F8] dark:bg-[#0C1017] px-3 py-2 text-xs font-mono text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-teal-600 transition-colors"
+                >
+                  <option value="29">29 - Karnataka</option>
+                  <option value="33">33 - Tamil Nadu</option>
+                  <option value="27">27 - Maharashtra</option>
+                  <option value="07">07 - Delhi</option>
+                  <option value="36">36 - Telangana</option>
+                  <option value="24">24 - Gujarat</option>
+                  <option value="32">32 - Kerala</option>
+                  <option value="19">19 - West Bengal</option>
+                </select>
+              </div>
+
+              {/* Registered Office Address */}
+              <div className="md:col-span-4">
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
+                  Registered Office Address *
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={gstSettings.registered_address}
+                  onChange={(e) => setGstSettings({ ...gstSettings, registered_address: e.target.value })}
+                  placeholder="Plot 42, Outer Ring Road, Bengaluru, Karnataka 560103"
+                  className="w-full h-9 rounded-lg border border-slate-200 dark:border-slate-800 bg-[#F4F5F8] dark:bg-[#0C1017] px-3 py-2 text-xs text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-teal-600 transition-colors"
+                />
+              </div>
+
+              {/* Authorized Signatory */}
+              <div className="md:col-span-2">
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
+                  Authorized Signatory *
+                </label>
+                <input
+                  type="text"
+                  value={gstSettings.authorized_signatory_name}
+                  onChange={(e) => setGstSettings({ ...gstSettings, authorized_signatory_name: e.target.value })}
+                  placeholder="e.g. Vijay B"
+                  className="w-full h-9 rounded-lg border border-slate-200 dark:border-slate-800 bg-[#F4F5F8] dark:bg-[#0C1017] px-3 py-2 text-xs text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-teal-600 transition-colors"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Sub-block 2: Bank Remittance Details (Printed on Invoices) */}
+          <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-[#F8FAFC] dark:bg-[#0C1017]/70 p-4 space-y-3">
+            <div className="flex items-center justify-between border-b border-slate-200/80 dark:border-slate-800 pb-2">
+              <span className="text-[11px] font-bold uppercase tracking-wider text-teal-700 dark:text-teal-400 font-mono">
+                Bank Remittance Details (Printed on Invoices)
+              </span>
+              <span className="text-[10px] text-slate-400 dark:text-slate-500">
+                Direct wire instructions displayed on customer invoices
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-6 gap-3">
+              {/* Account Holder Name */}
+              <div className="md:col-span-3">
+                <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1">
+                  Account Holder Name *
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={gstSettings.account_holder_name}
+                  onChange={(e) => setGstSettings({ ...gstSettings, account_holder_name: e.target.value })}
+                  placeholder="Beneficiary Legal Name"
+                  className="w-full h-9 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#131924] px-3 py-2 text-xs text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-teal-600 transition-colors"
+                />
+              </div>
+
+              {/* Bank Name */}
+              <div className="md:col-span-3">
+                <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1">
+                  Bank Name *
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={gstSettings.bank_name}
+                  onChange={(e) => setGstSettings({ ...gstSettings, bank_name: e.target.value })}
+                  placeholder="e.g. HDFC Bank"
+                  className="w-full h-9 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#131924] px-3 py-2 text-xs text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-teal-600 transition-colors"
+                />
+              </div>
+
+              {/* Bank Account Number */}
+              <div className="md:col-span-3">
+                <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1">
+                  Bank Account Number *
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={gstSettings.bank_account_number}
+                  onChange={(e) => setGstSettings({ ...gstSettings, bank_account_number: e.target.value })}
+                  placeholder="50200012345678"
+                  className="w-full h-9 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#131924] px-3 py-2 text-xs font-mono text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-teal-600 transition-colors"
+                />
+              </div>
+
+              {/* IFSC Code */}
+              <div className="md:col-span-3">
+                <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1">
+                  IFSC Code *
+                </label>
+                <input
+                  type="text"
+                  required
+                  maxLength={11}
+                  value={gstSettings.bank_ifsc_code}
+                  onChange={(e) => setGstSettings({ ...gstSettings, bank_ifsc_code: e.target.value.toUpperCase() })}
+                  placeholder="HDFC0001234"
+                  className="w-full h-9 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#131924] px-3 py-2 text-xs font-mono uppercase text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-teal-600 transition-colors"
+                />
+              </div>
+
+              {/* Branch Name */}
+              <div className="md:col-span-6">
+                <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1">
+                  Bank Branch Name & City
+                </label>
+                <input
+                  type="text"
+                  value={gstSettings.bank_branch}
+                  onChange={(e) => setGstSettings({ ...gstSettings, bank_branch: e.target.value })}
+                  placeholder="e.g. Koramangala 5th Block, Bengaluru, KA - 560034"
+                  className="w-full h-9 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#131924] px-3 py-2 text-xs text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-teal-600 transition-colors"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Sub-block 3: Invoicing Dispatch & Prefix Options */}
+          <div className="grid grid-cols-1 md:grid-cols-6 gap-4 items-end">
+            {/* Invoice Prefix */}
+            <div className="md:col-span-2">
+              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
+                Invoice Series Prefix
+              </label>
+              <input
+                type="text"
+                maxLength={6}
+                value={gstSettings.invoice_prefix}
+                onChange={(e) => setGstSettings({ ...gstSettings, invoice_prefix: e.target.value.toUpperCase() })}
+                placeholder="INV"
+                className="w-full h-9 rounded-lg border border-slate-200 dark:border-slate-800 bg-[#F4F5F8] dark:bg-[#0C1017] px-3 py-2 text-xs font-mono uppercase text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-teal-600 transition-colors"
+              />
+            </div>
+
+            {/* Auto-email Toggle Card */}
+            <div className="md:col-span-4">
+              <label className="flex items-center gap-3 h-9 px-3.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-[#F4F5F8] dark:bg-[#0C1017] cursor-pointer hover:border-teal-500/40 transition-colors">
+                <input
+                  type="checkbox"
+                  checked={gstSettings.auto_email_invoice}
+                  onChange={(e) => setGstSettings({ ...gstSettings, auto_email_invoice: e.target.checked })}
+                  className="h-4 w-4 rounded border-slate-300 text-teal-600 focus:ring-teal-500 cursor-pointer"
+                />
+                <span className="text-xs font-medium text-slate-700 dark:text-slate-300 select-none">
+                  Auto-email tax invoice PDF copy to buyer upon fulfillment
+                </span>
+              </label>
+            </div>
+          </div>
+
+          {/* Form Action Footer */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pt-4 border-t border-slate-100 dark:border-slate-800">
+            <p className="text-[11px] text-slate-500 dark:text-slate-400">
+              Parameters are bound automatically to all computer-generated Tax Invoices, Delivery Challans, and E-Way bills.
+            </p>
+            <button
+              type="submit"
+              disabled={isSavingGst}
+              className="flex items-center justify-center gap-2 rounded-lg bg-teal-700 hover:bg-teal-800 px-5 py-2 h-9 text-xs font-bold text-white shadow-subtle transition-colors shrink-0"
+            >
+              <IconCheck className="h-4 w-4" />
+              <span>{isSavingGst ? 'Saving Profile...' : 'Save GST Settings'}</span>
+            </button>
+          </div>
+        </form>
       </div>
 
-      {/* 2. User Roles & Permission Matrix */}
-      <div className="rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white/70 dark:bg-slate-900/60 p-6 backdrop-blur-xl">
+      {/* 2. Dynamic JSONB Custom Schema Builder */}
+      <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#131924] p-5 sm:p-6 shadow-card">
         <div className="flex items-center gap-3 border-b border-slate-100 dark:border-slate-800 pb-4">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-purple-500/10 text-purple-600 dark:text-purple-400">
-            <Shield className="h-5 w-5" />
+          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-teal-500/10 text-teal-700 dark:text-teal-400 border border-teal-500/20 shrink-0">
+            <IconSlidersHorizontal className="h-5 w-5" />
           </div>
           <div>
-            <h2 className="text-base font-bold text-slate-900 dark:text-white">
-              Role-Based Access Control (RBAC)
+            <h2 className="text-sm font-bold text-slate-900 dark:text-white">
+              Dynamic JSONB SKU Schema Engine
             </h2>
             <p className="text-xs text-slate-500 dark:text-slate-400">
-              Tenant-scoped security roles and module permissions.
+              Add arbitrary custom attributes (e.g. Serial #, Expiry Date, Material, Grade) backed by PostgreSQL JSONB.
             </p>
           </div>
         </div>
 
-        <div className="mt-4 overflow-x-auto">
+        {/* Existing Custom Fields */}
+        <div className="mt-5 space-y-3">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider">
+              Registered Tenant Fields
+            </span>
+            <span className="text-[11px] font-mono text-slate-400">
+              {customFields.length} active custom {customFields.length === 1 ? 'attribute' : 'attributes'}
+            </span>
+          </div>
+
+          {customFields.length === 0 ? (
+            <div className="p-4 rounded-lg border border-dashed border-slate-200 dark:border-slate-800 text-center text-xs text-slate-400">
+              No custom attributes defined yet. Create your first field below.
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {customFields.map((cf) => (
+                <div
+                  key={cf.id}
+                  className="flex items-center justify-between p-3 rounded-lg border border-slate-200 dark:border-slate-800 bg-[#F4F5F8] dark:bg-[#0C1017]"
+                >
+                  <div className="min-w-0 pr-2">
+                    <div className="font-bold text-xs text-slate-900 dark:text-white truncate">{cf.name}</div>
+                    <div className="font-mono text-[10px] text-teal-700 dark:text-teal-400 font-bold truncate">
+                      Key: {cf.key} ({cf.type})
+                    </div>
+                  </div>
+                  <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-400 shrink-0">
+                    {cf.required ? 'REQUIRED' : 'OPTIONAL'}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Add Field Form */}
+        <form
+          onSubmit={handleCreateField}
+          className="mt-6 border-t border-slate-100 dark:border-slate-800 pt-5 space-y-4"
+        >
+          <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800/80 pb-2">
+            <span className="text-[11px] font-bold uppercase tracking-wider text-teal-700 dark:text-teal-400 font-mono">
+              Register New Schema Field
+            </span>
+            <span className="text-[10px] text-slate-400 dark:text-slate-500">
+              Instantly dynamic across all catalog SKU items
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1.5">
+                Display Label *
+              </label>
+              <input
+                type="text"
+                required
+                value={fieldName}
+                onChange={(e) => {
+                  setFieldName(e.target.value);
+                  if (!fieldKey) {
+                    setFieldKey(e.target.value.toLowerCase().replace(/\s+/g, '_'));
+                  }
+                }}
+                placeholder="e.g. Battery Capacity"
+                className="w-full h-9 rounded-lg border border-slate-200 dark:border-slate-800 bg-[#F4F5F8] dark:bg-[#0C1017] px-3 py-2 text-xs text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-teal-600 transition-colors"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1.5">
+                JSONB Storage Key *
+              </label>
+              <input
+                type="text"
+                required
+                value={fieldKey}
+                onChange={(e) => setFieldKey(e.target.value)}
+                placeholder="e.g. battery_capacity"
+                className="w-full h-9 rounded-lg border border-slate-200 dark:border-slate-800 bg-[#F4F5F8] dark:bg-[#0C1017] px-3 py-2 text-xs font-mono text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-teal-600 transition-colors"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1.5">
+                Data Type
+              </label>
+              <select
+                value={fieldType}
+                onChange={(e) => setFieldType(e.target.value as any)}
+                className="w-full h-9 rounded-lg border border-slate-200 dark:border-slate-800 bg-[#F4F5F8] dark:bg-[#0C1017] px-3 py-2 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-teal-600 transition-colors"
+              >
+                <option value="text">Text (String)</option>
+                <option value="number">Numeric (Float/Int)</option>
+                <option value="date">Date (ISO Timestamp)</option>
+                <option value="select">Dropdown Choice</option>
+              </select>
+            </div>
+          </div>
+
+          {fieldType === 'select' && (
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 dark:text-slate-400 mb-1.5">
+                Options (Comma Separated) *
+              </label>
+              <input
+                type="text"
+                required
+                value={fieldOptions}
+                onChange={(e) => setFieldOptions(e.target.value)}
+                placeholder="e.g. 5000mAh, 10000mAh, 20000mAh"
+                className="w-full h-9 rounded-lg border border-slate-200 dark:border-slate-800 bg-[#F4F5F8] dark:bg-[#0C1017] px-3 py-2 text-xs text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-teal-600 transition-colors"
+              />
+            </div>
+          )}
+
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-3 border-t border-slate-100 dark:border-slate-800">
+            <label className="flex items-center gap-2 cursor-pointer text-xs font-semibold text-slate-700 dark:text-slate-300">
+              <input
+                type="checkbox"
+                checked={isRequired}
+                onChange={(e) => setIsRequired(e.target.checked)}
+                className="h-4 w-4 rounded border-slate-300 text-teal-700 focus:ring-teal-600"
+              />
+              Enforce required validation upon creation
+            </label>
+
+            <button
+              type="submit"
+              className="flex items-center justify-center gap-1.5 rounded-lg bg-teal-700 hover:bg-teal-800 px-4 py-2 h-9 text-xs font-bold text-white shadow-subtle transition-colors shrink-0"
+            >
+              <IconPlus className="h-4 w-4" />
+              <span>Register Schema Field</span>
+            </button>
+          </div>
+        </form>
+      </div>
+
+      {/* 3. Role-Based Access Control Overview */}
+      <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#131924] p-5 sm:p-6 shadow-card">
+        <div className="flex items-center gap-3 border-b border-slate-100 dark:border-slate-800 pb-4">
+          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-teal-500/10 text-teal-700 dark:text-teal-400 border border-teal-500/20 shrink-0">
+            <IconShieldCheck className="h-5 w-5" />
+          </div>
+          <div>
+            <h2 className="text-sm font-bold text-slate-900 dark:text-white">
+              Role Matrix & Cryptographic Permissions
+            </h2>
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              Granular access privilege distribution across authenticated tenant operator tiers.
+            </p>
+          </div>
+        </div>
+
+        <div className="mt-4 overflow-x-auto rounded-lg border border-slate-100 dark:border-slate-800/80">
           <table className="w-full text-left text-xs">
             <thead>
-              <tr className="border-b border-slate-100 dark:border-slate-800 text-slate-400 uppercase font-semibold text-[10px]">
-                <th className="pb-3">Role Tier</th>
-                <th className="pb-3 text-center">View Reports</th>
-                <th className="pb-3 text-center">Create PO / SO</th>
-                <th className="pb-3 text-center">Execute Transfers</th>
-                <th className="pb-3 text-center">Manual Adjustments</th>
-                <th className="pb-3 text-center">Manage Schema</th>
+              <tr className="border-b border-slate-200 dark:border-slate-800 bg-[#F6F8FA] dark:bg-[#0C1017] text-slate-600 dark:text-slate-400 uppercase font-mono text-[10px]">
+                <th className="py-2.5 px-3">System Role</th>
+                <th className="py-2.5 px-3 text-center">View Ledger</th>
+                <th className="py-2.5 px-3 text-center">Create PO / SO</th>
+                <th className="py-2.5 px-3 text-center">Approve Transfers</th>
+                <th className="py-2.5 px-3 text-center">Reconcile Stock</th>
+                <th className="py-2.5 px-3 text-center">Modify Schema</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60">
-              <tr>
-                <td className="py-3 font-bold text-slate-900 dark:text-white">
-                  Admin (Superuser)
+            <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60 font-mono text-[11px]">
+              <tr className="hover:bg-slate-50/50 dark:hover:bg-slate-800/20 transition-colors">
+                <td className="py-2.5 px-3 font-bold text-slate-900 dark:text-white font-sans">
+                  Company Admin
                 </td>
-                <td className="py-3 text-center text-emerald-500">✓</td>
-                <td className="py-3 text-center text-emerald-500">✓</td>
-                <td className="py-3 text-center text-emerald-500">✓</td>
-                <td className="py-3 text-center text-emerald-500">✓</td>
-                <td className="py-3 text-center text-emerald-500">✓</td>
+                <td className="py-2.5 px-3 text-center text-emerald-700 dark:text-emerald-400 font-bold">YES</td>
+                <td className="py-2.5 px-3 text-center text-emerald-700 dark:text-emerald-400 font-bold">YES</td>
+                <td className="py-2.5 px-3 text-center text-emerald-700 dark:text-emerald-400 font-bold">YES</td>
+                <td className="py-2.5 px-3 text-center text-emerald-700 dark:text-emerald-400 font-bold">YES</td>
+                <td className="py-2.5 px-3 text-center text-emerald-700 dark:text-emerald-400 font-bold">YES</td>
               </tr>
-              <tr>
-                <td className="py-3 font-bold text-slate-900 dark:text-white">
-                  Warehouse Staff
+              <tr className="hover:bg-slate-50/50 dark:hover:bg-slate-800/20 transition-colors">
+                <td className="py-2.5 px-3 font-bold text-slate-900 dark:text-white font-sans">
+                  Warehouse Manager
                 </td>
-                <td className="py-3 text-center text-emerald-500">✓</td>
-                <td className="py-3 text-center text-emerald-500">✓</td>
-                <td className="py-3 text-center text-emerald-500">✓</td>
-                <td className="py-3 text-center text-amber-500 font-medium">Approval req.</td>
-                <td className="py-3 text-center text-slate-400">—</td>
+                <td className="py-2.5 px-3 text-center text-emerald-700 dark:text-emerald-400 font-bold">YES</td>
+                <td className="py-2.5 px-3 text-center text-emerald-700 dark:text-emerald-400 font-bold">YES</td>
+                <td className="py-2.5 px-3 text-center text-emerald-700 dark:text-emerald-400 font-bold">YES</td>
+                <td className="py-2.5 px-3 text-center text-emerald-700 dark:text-emerald-400 font-bold">YES</td>
+                <td className="py-2.5 px-3 text-center text-slate-400">-</td>
               </tr>
-              <tr>
-                <td className="py-3 font-bold text-slate-900 dark:text-white">
+              <tr className="hover:bg-slate-50/50 dark:hover:bg-slate-800/20 transition-colors">
+                <td className="py-2.5 px-3 font-bold text-slate-900 dark:text-white font-sans">
+                  Operations Staff
+                </td>
+                <td className="py-2.5 px-3 text-center text-emerald-700 dark:text-emerald-400 font-bold">YES</td>
+                <td className="py-2.5 px-3 text-center text-emerald-700 dark:text-emerald-400 font-bold">YES</td>
+                <td className="py-2.5 px-3 text-center text-slate-400">-</td>
+                <td className="py-2.5 px-3 text-center text-slate-400">-</td>
+                <td className="py-2.5 px-3 text-center text-slate-400">-</td>
+              </tr>
+              <tr className="hover:bg-slate-50/50 dark:hover:bg-slate-800/20 transition-colors">
+                <td className="py-2.5 px-3 font-bold text-slate-900 dark:text-white font-sans">
                   Viewer (Auditor)
                 </td>
-                <td className="py-3 text-center text-emerald-500">✓</td>
-                <td className="py-3 text-center text-slate-400">—</td>
-                <td className="py-3 text-center text-slate-400">—</td>
-                <td className="py-3 text-center text-slate-400">—</td>
-                <td className="py-3 text-center text-slate-400">—</td>
+                <td className="py-2.5 px-3 text-center text-emerald-700 dark:text-emerald-400 font-bold">YES</td>
+                <td className="py-2.5 px-3 text-center text-slate-400">-</td>
+                <td className="py-2.5 px-3 text-center text-slate-400">-</td>
+                <td className="py-2.5 px-3 text-center text-slate-400">-</td>
+                <td className="py-2.5 px-3 text-center text-slate-400">-</td>
               </tr>
             </tbody>
           </table>
         </div>
       </div>
 
-      {/* 3. Outbound Webhooks Config */}
-      <div className="rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white/70 dark:bg-slate-900/60 p-6 backdrop-blur-xl">
+      {/* Future Roadmap Notice: Multi-Currency Support */}
+      <div className="rounded-xl border border-slate-200/80 dark:border-slate-800/80 bg-slate-50/80 dark:bg-[#131924]/60 p-4 shadow-subtle">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 text-xs">
+          <div className="flex items-center gap-2.5 text-slate-700 dark:text-slate-300">
+            <IconGlobe className="h-4 w-4 text-teal-600 dark:text-teal-400 shrink-0" />
+            <span className="font-medium">
+              Tenant Base Currency support can be implemented in the future if required — contact{' '}
+              <a href="mailto:support@invenza.com" className="text-teal-600 dark:text-teal-400 font-semibold hover:underline">
+                support@invenza.com
+              </a>{' '}
+              to request this.
+            </span>
+          </div>
+          <span className="text-[11px] text-slate-500 dark:text-slate-400 shrink-0">
+            Allows amounts to be converted between currencies such as INR, USD, and EUR.
+          </span>
+        </div>
+      </div>
+
+      {/* 4. Outbound Webhooks Config */}
+      <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#131924] p-5 sm:p-6 shadow-card">
         <div className="flex items-center gap-3 border-b border-slate-100 dark:border-slate-800 pb-4">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-sky-500/10 text-sky-600 dark:text-sky-400">
-            <Webhook className="h-5 w-5" />
+          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-teal-500/10 text-teal-700 dark:text-teal-400 border border-teal-500/20 shrink-0">
+            <IconWebhook className="h-5 w-5" />
           </div>
           <div>
-            <h2 className="text-base font-bold text-slate-900 dark:text-white">
+            <h2 className="text-sm font-bold text-slate-900 dark:text-white">
               Outbound Event Webhooks
             </h2>
             <p className="text-xs text-slate-500 dark:text-slate-400">
-              Fire HTTP POST payloads whenever stock events occur to self-integrate with external
-              tools.
+              Fire HTTP POST payloads whenever stock events occur to integrate with external ERPs.
             </p>
           </div>
         </div>
 
-        <form onSubmit={handleAddWebhook} className="mt-4 flex gap-3">
+        <form onSubmit={handleAddWebhook} className="mt-4 flex flex-col sm:flex-row gap-3">
           <input
             type="url"
             required
             value={newWebhookUrl}
             onChange={(e) => setNewWebhookUrl(e.target.value)}
             placeholder="https://your-service.com/api/invenza-listener"
-            className="flex-1 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-3 py-2 text-xs focus:outline-none"
+            className="flex-1 h-9 rounded-lg border border-slate-200 dark:border-slate-800 bg-[#F4F5F8] dark:bg-[#0C1017] px-3 py-2 text-xs text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-teal-600 transition-colors"
           />
           <button
             type="submit"
-            className="rounded-xl bg-indigo-600 hover:bg-indigo-700 px-4 py-2 text-xs font-semibold text-white shadow-sm"
+            className="h-9 rounded-lg bg-teal-700 hover:bg-teal-800 px-4 py-2 text-xs font-bold text-white shadow-subtle transition-colors shrink-0"
           >
             Register Webhook
           </button>
@@ -250,20 +921,22 @@ export const Settings: React.FC = () => {
           {webhooks.map((wh) => (
             <div
               key={wh.id}
-              className="flex items-center justify-between rounded-xl border border-slate-200 dark:border-slate-800 p-3 text-xs bg-slate-50/50 dark:bg-slate-800/30"
+              className="flex items-center justify-between rounded-lg border border-slate-200 dark:border-slate-800 p-3 text-xs bg-[#F4F5F8] dark:bg-[#0C1017]"
             >
               <div className="font-mono text-slate-700 dark:text-slate-300 truncate max-w-md">
                 {wh.url}
               </div>
-              <div className="flex items-center gap-2">
-                <span className="rounded bg-emerald-500/10 px-2 py-0.5 text-[10px] font-bold text-emerald-600 dark:text-emerald-400">
+              <div className="flex items-center gap-2 shrink-0">
+                <span className="rounded font-mono text-[10px] font-bold bg-emerald-500/10 px-2 py-0.5 text-emerald-700 dark:text-emerald-400 border border-emerald-500/20">
                   Active
                 </span>
                 <button
+                  type="button"
                   onClick={() => setWebhooks((prev) => prev.filter((w) => w.id !== wh.id))}
-                  className="text-slate-400 hover:text-rose-500"
+                  className="text-slate-400 hover:text-rose-500 transition-colors p-1"
+                  aria-label="Remove Webhook"
                 >
-                  <Trash2 className="h-3.5 w-3.5" />
+                  <IconTrash2 className="h-3.5 w-3.5" />
                 </button>
               </div>
             </div>
@@ -271,96 +944,352 @@ export const Settings: React.FC = () => {
         </div>
       </div>
 
-      {/* Add Custom Field Modal */}
-      <Modal
-        isOpen={isModalOpen}
-        onClose={() => setIsModalOpen(false)}
-        title="Add Dynamic JSONB Custom Field"
-        subtitle="This attribute will immediately be available across all product SKUs"
-        maxWidth="md"
-      >
-        <form onSubmit={handleCreateCustomField} className="space-y-4">
-          <div>
-            <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-              Field Display Name *
-            </label>
-            <input
-              type="text"
-              required
-              value={fieldName}
-              onChange={(e) => {
-                setFieldName(e.target.value);
-                if (!fieldKey) {
-                  setFieldKey(
-                    e.target.value
-                      .toLowerCase()
-                      .replace(/[^a-zA-Z0-9]/g, '')
-                  );
-                }
-              }}
-              placeholder="e.g. Storage Zone"
-              className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-3 py-2 text-xs focus:outline-none"
-            />
+      {/* 5. Legal & Terms Shortcuts */}
+      <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#131924] p-5 sm:p-6 shadow-card">
+        <div className="flex items-center gap-3 border-b border-slate-100 dark:border-slate-800 pb-4">
+          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-teal-500/10 text-teal-700 dark:text-teal-400 border border-teal-500/20 shrink-0">
+            <IconFileText className="h-5 w-5" />
           </div>
-
           <div>
-            <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-              JSONB Key Identifier *
-            </label>
-            <input
-              type="text"
-              required
-              value={fieldKey}
-              onChange={(e) => setFieldKey(e.target.value)}
-              placeholder="e.g. storageZone"
-              className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-3 py-2 text-xs font-mono focus:outline-none"
-            />
+            <h2 className="text-sm font-bold text-slate-900 dark:text-white">
+              Legal Agreements & Security Policies
+            </h2>
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              Review Master Subscription Agreements and tenant cryptographic isolation policies.
+            </p>
           </div>
+        </div>
 
+        <div className="mt-4 flex flex-wrap gap-3">
+          <a
+            href="/terms"
+            className="inline-flex items-center gap-2 rounded-lg border border-slate-200 dark:border-slate-800 bg-[#F4F5F8] dark:bg-[#0C1017] px-4 py-2.5 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-white transition-colors"
+          >
+            <IconFileText className="h-4 w-4 text-teal-600 dark:text-teal-400" />
+            Terms of Service
+          </a>
+          <a
+            href="/privacy"
+            className="inline-flex items-center gap-2 rounded-lg border border-slate-200 dark:border-slate-800 bg-[#F4F5F8] dark:bg-[#0C1017] px-4 py-2.5 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-white transition-colors"
+          >
+            <IconFileText className="h-4 w-4 text-teal-600 dark:text-teal-400" />
+            Privacy Policy
+          </a>
+        </div>
+      </div>
+
+      {/* 6. Danger Zone: Data & Ledger Management */}
+      <div className="rounded-xl border border-rose-300 dark:border-rose-900/60 bg-rose-500/5 p-5 sm:p-6 space-y-4">
+        <div className="flex items-center gap-2.5 border-b border-rose-200 dark:border-rose-900/50 pb-3">
+          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-rose-500/20 text-rose-600 shrink-0">
+            <IconAlertTriangle className="h-4 w-4" />
+          </div>
           <div>
-            <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-              Data Type
-            </label>
-            <select
-              value={fieldType}
-              onChange={(e) => setFieldType(e.target.value as any)}
-              className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-3 py-2 text-xs focus:outline-none"
-            >
-              <option value="text">Text (String)</option>
-              <option value="number">Numeric (Float / Int)</option>
-              <option value="date">Date Picker</option>
-              <option value="select">Dropdown Select List</option>
-            </select>
+            <h2 className="text-sm font-bold text-slate-900 dark:text-white">
+              Danger Zone: Data & Ledger Safeguards
+            </h2>
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              Irreversible destructive operations protected by multi-step identity verification and Super Admin dual-authorization.
+            </p>
           </div>
+        </div>
 
-          {fieldType === 'select' && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {/* Action 1: Clear Product Catalog */}
+          <div className="p-4 rounded-lg border border-rose-200 dark:border-rose-900/40 bg-white/80 dark:bg-slate-900/60 flex flex-col justify-between gap-3">
             <div>
-              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                Dropdown Options (comma separated)
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <h3 className="text-xs font-bold text-slate-900 dark:text-white">
+                    Reset Product Catalog
+                  </h3>
+                  <span className="font-mono text-[9px] font-bold px-1.5 py-0.5 rounded bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border border-indigo-500/20">
+                    MFA Protected
+                  </span>
+                </div>
+                <span className="font-mono text-[10px] font-bold px-2 py-0.5 rounded bg-rose-500/10 text-rose-600">
+                  {products.length} Items
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
+                Permanently purges all SKU catalog entries and warehouse allocations. Requires account password and email OTP verification. Logged to Movement Ledger audit trail.
+              </p>
+            </div>
+            <button
+              type="button"
+              disabled={products.length === 0}
+              onClick={() => openDangerModal('catalog')}
+              className={`w-full py-1.5 px-3 rounded-lg text-xs font-bold transition-colors flex items-center justify-center gap-2 ${
+                products.length === 0
+                  ? 'bg-slate-100 dark:bg-slate-800 text-slate-400 cursor-not-allowed'
+                  : 'bg-rose-700 hover:bg-rose-800 text-white shadow-subtle'
+              }`}
+            >
+              <IconLock className="h-3.5 w-3.5" />
+              <IconTrash2 className="h-3.5 w-3.5" />
+              Clear Entire Catalog
+            </button>
+          </div>
+
+          {/* Action 2: Clear Movement Ledger (CRITICAL - DUAL-AUTHORIZATION) */}
+          <div className="p-4 rounded-lg border border-rose-200 dark:border-rose-900/40 bg-white/80 dark:bg-slate-900/60 flex flex-col justify-between gap-3">
+            <div>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <h3 className="text-xs font-bold text-slate-900 dark:text-white">
+                    Purge Movement Ledger
+                  </h3>
+                  <span className="font-mono text-[9px] font-bold px-1.5 py-0.5 rounded bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/20 uppercase">
+                    Dual-Auth Required
+                  </span>
+                </div>
+                <span className="font-mono text-[10px] font-bold px-2 py-0.5 rounded bg-rose-500/10 text-rose-600">
+                  {ledger.length} Records
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
+                Highest security level. Destroys immutable stock audit history. Requires Password + Email OTP, plus <strong>mandatory explicit authorization from Super Admin</strong> before execution.
+              </p>
+            </div>
+
+            {/* If there is a pending purge request */}
+            {pendingPurgeRequest && pendingPurgeRequest.status === 'pending_super_admin_approval' ? (
+              <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-900 dark:text-amber-300 text-xs space-y-2">
+                <div className="flex items-center justify-between font-bold">
+                  <span className="flex items-center gap-1.5">
+                    <IconClock className="h-3.5 w-3.5 text-amber-500 animate-pulse" />
+                    Pending Super Admin Approval
+                  </span>
+                  <span className="font-mono text-[10px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-700 dark:text-amber-300 font-bold">
+                    {pendingPurgeRequest.id}
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-600 dark:text-slate-400">
+                  Requested by <strong>{pendingPurgeRequest.requested_by_name}</strong>. Verified via Password + Email OTP. Audit ledger is untouched pending approval.
+                </p>
+                {isSuperAdmin && (
+                  <button
+                    type="button"
+                    disabled={isProcessingApproval}
+                    onClick={() => handleSuperAdminDirectApprove(pendingPurgeRequest.id)}
+                    className="w-full py-1.5 px-2.5 rounded bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-colors flex items-center justify-center gap-1.5 shadow-sm"
+                  >
+                    <IconShieldCheck className="h-3.5 w-3.5" />
+                    {isProcessingApproval ? 'Authorizing...' : 'Super Admin: Authorize & Execute Purge'}
+                  </button>
+                )}
+              </div>
+            ) : (
+              <button
+                type="button"
+                disabled={ledger.length === 0}
+                onClick={() => openDangerModal('ledger')}
+                className={`w-full py-1.5 px-3 rounded-lg text-xs font-bold transition-colors flex items-center justify-center gap-2 ${
+                  ledger.length === 0
+                    ? 'bg-slate-100 dark:bg-slate-800 text-slate-400 cursor-not-allowed'
+                    : 'bg-rose-700 hover:bg-rose-800 text-white shadow-subtle'
+                }`}
+              >
+                <IconShieldCheck className="h-3.5 w-3.5" />
+                <IconTrash2 className="h-3.5 w-3.5" />
+                Clear Movement Ledger
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Multi-Step Identity & Security Verification Modal */}
+      <Modal
+        isOpen={dangerModal.isOpen}
+        onClose={() => {
+          if (!isExecutingDanger) {
+            setDangerModal((prev) => ({ ...prev, isOpen: false }));
+          }
+        }}
+        title={dangerModal.type === 'catalog' ? 'Multi-Step Verification: Catalog Reset' : 'High Security Dual-Authorization: Ledger Purge'}
+        subtitle="Password and Email OTP verification required before destructive action"
+        maxWidth="lg"
+      >
+        <form onSubmit={handleExecuteDangerAction} className="space-y-4">
+          {/* Security Notice Banner */}
+          <div
+            className={`flex items-start gap-3 p-3.5 rounded-xl border text-xs ${
+              dangerModal.type === 'ledger'
+                ? 'bg-amber-500/10 border-amber-500/30 text-amber-900 dark:text-amber-200'
+                : 'bg-rose-500/10 border-rose-500/30 text-rose-900 dark:text-rose-200'
+            }`}
+          >
+            <IconAlertTriangle
+              className={`h-5 w-5 shrink-0 mt-0.5 ${
+                dangerModal.type === 'ledger' ? 'text-amber-500' : 'text-rose-500'
+              }`}
+            />
+            <div className="space-y-1">
+              <div className="font-bold text-sm text-slate-900 dark:text-white flex items-center gap-2">
+                <span>{dangerModal.title}</span>
+                {dangerModal.type === 'ledger' && (
+                  <span className="text-[10px] font-extrabold uppercase px-2 py-0.5 rounded bg-amber-500/20 text-amber-700 dark:text-amber-300 border border-amber-500/30">
+                    Dual-Authorization
+                  </span>
+                )}
+              </div>
+              <p className="leading-relaxed">{dangerModal.description}</p>
+              {dangerModal.type === 'ledger' && (
+                <div className="mt-2 pt-2 border-t border-amber-500/20 text-[11px] font-semibold text-amber-800 dark:text-amber-300">
+                  CRITICAL RULE: The Movement Ledger purge destroys the immutable audit history. Verifying your identity with Password + Email OTP will NOT wipe the ledger immediately. It submits a formal purge authorization request to the Super Administrator. The ledger remains locked and untouched until Super Admin approval is explicitly granted.
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Step 1: Password Verification */}
+          <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/40 p-3.5 space-y-2">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
+                <span className="flex h-4 w-4 items-center justify-center rounded-full bg-slate-900 dark:bg-white text-[10px] font-extrabold text-white dark:text-slate-900">
+                  1
+                </span>
+                Account Password Verification
               </label>
+              <span className="text-[11px] text-slate-500 font-mono">
+                {user?.email || 'admin@invenza.internal'}
+              </span>
+            </div>
+            <div className="relative">
               <input
-                type="text"
-                value={optionsStr}
-                onChange={(e) => setOptionsStr(e.target.value)}
-                placeholder="Zone A, Zone B, Cold Storage"
-                className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-3 py-2 text-xs focus:outline-none"
+                type={showDangerPassword ? 'text' : 'password'}
+                required
+                value={dangerPassword}
+                onChange={(e) => setDangerPassword(e.target.value)}
+                placeholder="Enter your current account password"
+                className="w-full rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 px-3 py-2 text-xs text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:border-rose-500 dark:focus:border-rose-500 pr-10"
               />
+              <button
+                type="button"
+                onClick={() => setShowDangerPassword(!showDangerPassword)}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition-colors"
+                title={showDangerPassword ? 'Hide password' : 'Show password'}
+              >
+                {showDangerPassword ? <IconEyeOff className="h-4 w-4" /> : <IconEye className="h-4 w-4" />}
+              </button>
+            </div>
+          </div>
+
+          {/* Step 2: Registered Email OTP */}
+          <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/40 p-3.5 space-y-2.5">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
+                <span className="flex h-4 w-4 items-center justify-center rounded-full bg-slate-900 dark:bg-white text-[10px] font-extrabold text-white dark:text-slate-900">
+                  2
+                </span>
+                Registered Email OTP Verification
+              </label>
+              {otpSent && (
+                <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-600 dark:text-emerald-400">
+                  <IconCheck className="h-3 w-3" />
+                  Code Dispatched
+                </span>
+              )}
+            </div>
+
+            <div className="flex flex-col sm:flex-row gap-2">
+              <div className="relative flex-1">
+                <input
+                  type="text"
+                  maxLength={6}
+                  required
+                  value={dangerOtp}
+                  onChange={(e) => setDangerOtp(e.target.value.replace(/[^0-9]/g, ''))}
+                  placeholder="Enter 6-digit OTP"
+                  className="w-full font-mono text-center tracking-[0.3em] font-bold text-sm rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 px-3 py-2 text-slate-900 dark:text-white placeholder:tracking-normal placeholder:font-sans placeholder:text-xs placeholder:text-slate-400 focus:outline-none focus:border-rose-500"
+                />
+              </div>
+
+              <button
+                type="button"
+                disabled={isSendingOtp || otpCountdown > 0}
+                onClick={handleSendDangerOtp}
+                className={`px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 shrink-0 ${
+                  otpCountdown > 0
+                    ? 'bg-slate-100 dark:bg-slate-800 text-slate-500 cursor-not-allowed'
+                    : 'bg-slate-900 hover:bg-slate-800 dark:bg-slate-800 dark:hover:bg-slate-700 text-white shadow-sm'
+                }`}
+              >
+                {isSendingOtp ? (
+                  <IconRefreshCw className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <IconMail className="h-3.5 w-3.5" />
+                )}
+                <span>
+                  {otpCountdown > 0
+                    ? `Resend in ${otpCountdown}s`
+                    : otpSent
+                    ? 'Resend Verification Code'
+                    : 'Send Verification Code'}
+                </span>
+              </button>
+            </div>
+
+            <div className="flex items-center justify-between text-[11px] text-slate-500">
+              <span>A 6-digit verification code has been dispatched to <strong>{user?.email || 'admin@invenza.internal'}</strong></span>
+              <span className="text-[10px] text-slate-400">Valid for 10 minutes</span>
+            </div>
+          </div>
+
+          {/* Feedback Messages */}
+          {dangerError && (
+            <div className="p-3 rounded-lg bg-rose-500/10 border border-rose-500/30 text-rose-700 dark:text-rose-400 text-xs flex items-center gap-2">
+              <IconAlertCircle className="h-4 w-4 shrink-0" />
+              <span>{dangerError}</span>
             </div>
           )}
 
-          <div className="flex justify-end gap-3 pt-3 border-t border-slate-100 dark:border-slate-800">
+          {dangerSuccess && (
+            <div className="p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-emerald-700 dark:text-emerald-400 text-xs flex items-center gap-2">
+              <IconCheck className="h-4 w-4 shrink-0" />
+              <span>{dangerSuccess}</span>
+            </div>
+          )}
+
+          {/* Action Buttons */}
+          <div className="flex items-center justify-between pt-3 border-t border-slate-100 dark:border-slate-800">
             <button
               type="button"
-              onClick={() => setIsModalOpen(false)}
-              className="rounded-xl border border-slate-200 dark:border-slate-700 px-4 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300"
+              disabled={isExecutingDanger}
+              onClick={() => setDangerModal((prev) => ({ ...prev, isOpen: false }))}
+              className="rounded-lg border border-slate-200 dark:border-slate-800 px-4 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
             >
               Cancel
             </button>
+
             <button
               type="submit"
-              className="rounded-xl bg-indigo-600 hover:bg-indigo-700 px-5 py-2 text-xs font-semibold text-white shadow-md shadow-indigo-600/20"
+              disabled={isExecutingDanger || !dangerPassword || dangerOtp.length !== 6}
+              className={`rounded-lg px-5 py-2 text-xs font-bold text-white shadow-subtle transition-all flex items-center gap-2 ${
+                isExecutingDanger || !dangerPassword || dangerOtp.length !== 6
+                  ? 'bg-slate-300 dark:bg-slate-800 text-slate-500 cursor-not-allowed'
+                  : dangerModal.type === 'ledger'
+                  ? 'bg-amber-600 hover:bg-amber-700'
+                  : 'bg-rose-700 hover:bg-rose-800'
+              }`}
             >
-              Create Field
+              {isExecutingDanger ? (
+                <>
+                  <IconRefreshCw className="h-4 w-4 animate-spin" />
+                  <span>Verifying Credentials...</span>
+                </>
+              ) : dangerModal.type === 'catalog' ? (
+                <>
+                  <IconTrash2 className="h-4 w-4" />
+                  <span>Verify & Clear Entire Catalog</span>
+                </>
+              ) : (
+                <>
+                  <IconShieldCheck className="h-4 w-4" />
+                  <span>Verify Identity & Submit for Super Admin Approval</span>
+                </>
+              )}
             </button>
           </div>
         </form>

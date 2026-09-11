@@ -77,3 +77,14 @@ async def list_movements(
         )
 
     return movements
+
+@router.delete("/clear-all")
+async def clear_all_movements(
+    tenant_id: UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_db),
+):
+    from sqlalchemy import delete
+    await db.execute(delete(StockMovement).where(StockMovement.tenant_id == tenant_id))
+    await db.commit()
+    return {"message": "Movement ledger cleared successfully."}
+

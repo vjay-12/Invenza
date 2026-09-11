@@ -1,25 +1,28 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
-  FileDown,
-  Plus,
-  Search,
-  CheckCircle2,
-  Clock,
-  Warehouse,
-  ArrowRight,
-  Package,
-  Layers,
-  Trash2,
-} from 'lucide-react';
+  IconFileDown,
+  IconPlus,
+  IconSearch,
+  IconCheck,
+  IconClock,
+  IconWarehouse,
+  IconPackage,
+  IconTrash2,
+  IconAlertTriangle,
+} from '../components/icons';
 import { useInventory } from '../context/InventoryContext';
 import { PurchaseOrder, POLineItem } from '../types/inventory';
 import { Modal } from '../components/common/Modal';
+import { PageMeta } from '../components/common/PageMeta';
+import { WarehouseSelectDropdown } from '../components/common/WarehouseSelectDropdown';
+import { ProductSearchDropdown } from '../components/common/ProductSearchDropdown';
 
 export const PurchaseOrders: React.FC = () => {
   const {
     purchaseOrders,
     products,
     locations,
+    selectedLocationId,
     formatCurrency,
     createPurchaseOrder,
     receiveGoods,
@@ -30,11 +33,25 @@ export const PurchaseOrders: React.FC = () => {
   const [receivingPO, setReceivingPO] = useState<PurchaseOrder | null>(null);
   const [grnNotes, setGrnNotes] = useState('');
 
+  // Selected warehouse metadata
+  const selectedLocation = locations.find((l) => l.id === selectedLocationId);
+
   // Create PO Form state
   const [supplierName, setSupplierName] = useState('');
-  const [targetLocationId, setTargetLocationId] = useState(locations[0]?.id || '');
+  const [targetLocationId, setTargetLocationId] = useState(
+    selectedLocationId !== 'all' ? selectedLocationId : (locations[0]?.id || '')
+  );
   const [orderDate, setOrderDate] = useState(new Date().toISOString().split('T')[0]);
   const [poNotes, setPoNotes] = useState('');
+
+  useEffect(() => {
+    if (selectedLocationId !== 'all') {
+      setTargetLocationId(selectedLocationId);
+    } else if (!targetLocationId && locations.length > 0) {
+      setTargetLocationId(locations[0].id);
+    }
+  }, [locations, selectedLocationId]);
+
   const [lineItems, setLineItems] = useState<POLineItem[]>([
     {
       productId: products[0]?.id || '',
@@ -42,11 +59,86 @@ export const PurchaseOrders: React.FC = () => {
       name: products[0]?.name || '',
       orderedQty: 20,
       receivedQty: 0,
-      unitCost: products[0]?.costPrice || 0,
+      unitCost: products[0]?.costPrice || 50,
     },
   ]);
 
+  const handleAddLineItem = () => {
+    const p = products[0];
+    if (!p) return;
+    setLineItems((prev) => [
+      ...prev,
+      {
+        productId: p.id,
+        sku: p.sku,
+        name: p.name,
+        orderedQty: 10,
+        receivedQty: 0,
+        unitCost: p.costPrice,
+      },
+    ]);
+  };
+
+  const handleUpdateItem = (index: number, updates: Partial<POLineItem>) => {
+    setLineItems((prev) => {
+      const copy = [...prev];
+      copy[index] = { ...copy[index], ...updates };
+      return copy;
+    });
+  };
+
+  const handleProductSelect = (index: number, prodId: string) => {
+    const p = products.find((prod) => prod.id === prodId);
+    if (!p) return;
+    handleUpdateItem(index, {
+      productId: p.id,
+      sku: p.sku,
+      name: p.name,
+      unitCost: p.costPrice,
+    });
+  };
+
+  const handleRemoveItem = (index: number) => {
+    if (lineItems.length <= 1) return;
+    setLineItems((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const calculateGrandTotal = () =>
+    lineItems.reduce((acc, it) => acc + it.orderedQty * it.unitCost, 0);
+
+  const handleSubmitPO = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!supplierName || !targetLocationId || lineItems.length === 0) return;
+
+    const targetLoc = locations.find((l) => l.id === targetLocationId);
+
+    createPurchaseOrder({
+      supplierName,
+      targetLocationId,
+      targetLocationName: targetLoc?.name || 'Warehouse',
+      orderDate,
+      items: lineItems,
+      totalAmount: calculateGrandTotal(),
+      notes: poNotes,
+    });
+
+    setIsCreateModalOpen(false);
+    setSupplierName('');
+    setPoNotes('');
+    setTargetLocationId(selectedLocationId !== 'all' ? selectedLocationId : (locations[0]?.id || ''));
+  };
+
+  const handleConfirmGRN = () => {
+    if (!receivingPO) return;
+    receiveGoods(receivingPO.id, grnNotes);
+    setReceivingPO(null);
+    setGrnNotes('');
+  };
+
   const filteredPOs = purchaseOrders.filter((po) => {
+    if (selectedLocationId !== 'all' && po.targetLocationId !== selectedLocationId) {
+      return false;
+    }
     const q = searchQuery.toLowerCase();
     return (
       po.poNumber.toLowerCase().includes(q) ||
@@ -55,194 +147,158 @@ export const PurchaseOrders: React.FC = () => {
     );
   });
 
-  // Add line item
-  const handleAddLineItem = () => {
-    const firstProd = products[0];
-    if (!firstProd) return;
-    setLineItems((prev) => [
-      ...prev,
-      {
-        productId: firstProd.id,
-        sku: firstProd.sku,
-        name: firstProd.name,
-        orderedQty: 10,
-        receivedQty: 0,
-        unitCost: firstProd.costPrice,
-      },
-    ]);
-  };
-
-  // Change product in line item
-  const handleProductChange = (index: number, productId: string) => {
-    const prod = products.find((p) => p.id === productId);
-    if (!prod) return;
-    setLineItems((prev) =>
-      prev.map((item, i) =>
-        i === index
-          ? {
-              ...item,
-              productId: prod.id,
-              sku: prod.sku,
-              name: prod.name,
-              unitCost: prod.costPrice,
-            }
-          : item
-      )
-    );
-  };
-
-  // Change qty or cost
-  const handleItemChange = (index: number, field: 'orderedQty' | 'unitCost', value: number) => {
-    setLineItems((prev) =>
-      prev.map((item, i) => (i === index ? { ...item, [field]: value } : item))
-    );
-  };
-
-  // Remove line item
-  const handleRemoveLineItem = (index: number) => {
-    setLineItems((prev) => prev.filter((_, i) => i !== index));
-  };
-
-  const calculateTotal = () => {
-    return lineItems.reduce((acc, it) => acc + it.orderedQty * it.unitCost, 0);
-  };
-
-  // Handle PO submit
-  const handleCreatePOSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!supplierName || lineItems.length === 0) return;
-
-    const loc = locations.find((l) => l.id === targetLocationId) || locations[0];
-
-    createPurchaseOrder({
-      supplierName,
-      targetLocationId: loc.id,
-      targetLocationName: loc.name,
-      orderDate,
-      items: lineItems,
-      totalAmount: calculateTotal(),
-      notes: poNotes,
-    });
-
-    setIsCreateModalOpen(false);
-    setSupplierName('');
-    setPoNotes('');
-  };
-
-  // Handle Confirm Receipt (GRN)
-  const handleConfirmGRN = () => {
-    if (!receivingPO) return;
-    receiveGoods(receivingPO.id, grnNotes);
-    setReceivingPO(null);
-    setGrnNotes('');
-  };
-
   return (
     <div className="space-y-6">
+      <PageMeta
+        title="Purchase Orders & GRN Receipts | Invenza Inventory"
+        description="Procurement orders, supplier delivery reconciliation, and automated goods received note (GRN) posting to the double-entry movement ledger."
+        canonicalPath="/purchase-orders"
+      />
+
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">
-            Purchase Orders & Goods Receipt (GRN)
+            Purchase Orders & Goods Inward (GRN)
           </h1>
-          <p className="text-sm text-slate-500 dark:text-slate-400 mt-0.5">
-            Procure inventory from vendors. Receiving goods automatically creates immutable ledger
-            receipt movements.
+          <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+            Issue orders to suppliers and record verified deliveries. Confirming receipts automatically
+            credits warehouse inventory and posts IN movement entries.
           </p>
         </div>
 
         <button
+          type="button"
           onClick={() => setIsCreateModalOpen(true)}
-          className="flex items-center gap-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 px-4 py-2 text-xs font-semibold text-white shadow-md shadow-indigo-600/20 transition-colors self-start sm:self-auto"
+          className="flex items-center gap-2 rounded-lg bg-teal-700 hover:bg-teal-800 px-4 py-2 text-xs font-bold text-white shadow-subtle transition-colors self-start sm:self-auto"
         >
-          <Plus className="h-4 w-4" />
+          <IconPlus className="h-4 w-4" />
           Create Purchase Order
         </button>
       </div>
 
+      {/* Active Warehouse Filter Banner */}
+      {selectedLocationId !== 'all' && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-teal-200 bg-teal-50/90 dark:border-teal-500/25 dark:bg-teal-500/10 px-4 py-3 text-xs text-teal-900 dark:text-teal-300 shadow-sm">
+          <div className="flex items-center gap-2.5">
+            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-teal-100 dark:bg-teal-500/20 text-teal-700 dark:text-teal-400 shrink-0">
+              <IconWarehouse className="h-4 w-4" />
+            </div>
+            <div>
+              <span className="text-slate-600 dark:text-slate-400">Target Warehouse Filter: </span>
+              <strong className="text-slate-900 dark:text-white font-bold">{selectedLocation?.name || 'Warehouse'}</strong>
+              {selectedLocation?.code && (
+                <span className="ml-2 rounded bg-teal-100/80 dark:bg-teal-500/10 text-teal-800 dark:text-teal-300 border border-teal-300 dark:border-teal-500/20 px-1.5 py-0.5 text-[11px] font-mono font-semibold">
+                  {selectedLocation.code}
+                </span>
+              )}
+            </div>
+          </div>
+          <span className="text-[11px] text-teal-700 dark:text-teal-400/90 font-mono font-semibold">
+            {filteredPOs.length} of {purchaseOrders.length} POs shown
+          </span>
+        </div>
+      )}
+
       {/* Filter toolbar */}
-      <div className="flex items-center justify-between gap-3 rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white/70 dark:bg-slate-900/60 p-4 backdrop-blur-xl">
+      <div className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#131924] p-3 shadow-card">
         <div className="relative w-full sm:w-80">
-          <Search className="absolute left-3.5 top-2.5 h-4 w-4 text-slate-400" />
+          <IconSearch className="absolute left-3 top-2.5 h-3.5 w-3.5 text-slate-400" />
           <input
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search by PO #, supplier, or location..."
-            className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 pl-9 pr-4 py-2 text-xs text-slate-900 dark:text-white placeholder-slate-400 focus:border-indigo-500 focus:outline-none"
+            placeholder="Search PO #, supplier, warehouse..."
+            className="w-full rounded-lg border border-slate-200 dark:border-slate-800 bg-[#F4F5F8] dark:bg-[#0C1017] pl-8 pr-3 py-1.5 text-xs text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-teal-600"
           />
         </div>
 
-        <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
-          <span>Total POs: </span>
-          <span className="font-bold text-slate-800 dark:text-slate-200">
-            {purchaseOrders.length}
-          </span>
+        <div className="text-xs text-slate-500 dark:text-slate-400 font-mono">
+          Total POs: <span className="font-bold text-slate-800 dark:text-slate-200">{filteredPOs.length}</span>
+          {selectedLocationId !== 'all' && (
+            <span className="text-teal-600 dark:text-teal-400 ml-1.5">
+              (in {selectedLocation?.name})
+            </span>
+          )}
         </div>
       </div>
 
-      {/* POs Table */}
-      <div className="overflow-hidden rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white/70 dark:bg-slate-900/60 backdrop-blur-xl">
+      {/* Purchase Orders List Table */}
+      <div className="overflow-hidden rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#131924] shadow-card">
         <div className="overflow-x-auto">
           <table className="w-full text-left text-xs">
             <thead>
-              <tr className="border-b border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/50 text-slate-500 dark:text-slate-400 uppercase font-semibold text-[10px]">
-                <th className="py-3 px-4">PO Number</th>
-                <th className="py-3 px-3">Supplier Name</th>
-                <th className="py-3 px-3">Target Warehouse</th>
-                <th className="py-3 px-3">Order Date</th>
-                <th className="py-3 px-3">Line Items</th>
-                <th className="py-3 px-3 text-right">Total Amount</th>
-                <th className="py-3 px-3 text-center">Status</th>
-                <th className="py-3 px-4 text-center">Actions</th>
+              <tr className="border-b border-slate-200 dark:border-slate-800 bg-[#F6F8FA] dark:bg-[#0C1017] text-slate-600 dark:text-slate-400 uppercase font-semibold text-[10px]">
+                <th className="py-2.5 px-4">PO Number</th>
+                <th className="py-2.5 px-3">Supplier Name</th>
+                <th className="py-2.5 px-3">Target Warehouse</th>
+                <th className="py-2.5 px-3">Order Date</th>
+                <th className="py-2.5 px-3">Line Items</th>
+                <th className="py-2.5 px-3 text-right">Total Amount</th>
+                <th className="py-2.5 px-3 text-center">Status</th>
+                <th className="py-2.5 px-4 text-center">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60">
+              {filteredPOs.length === 0 && (
+                <tr>
+                  <td colSpan={8} className="py-12 text-center text-slate-400">
+                    <IconFileDown className="mx-auto h-8 w-8 text-slate-500 mb-2 opacity-50" />
+                    <p className="font-semibold text-sm">No purchase orders found</p>
+                    <p className="text-xs text-slate-500 mt-1">
+                      {selectedLocationId !== 'all'
+                        ? `No purchase orders recorded for ${selectedLocation?.name || 'this warehouse'}.`
+                        : 'No purchase orders match your search query.'}
+                    </p>
+                  </td>
+                </tr>
+              )}
               {filteredPOs.map((po) => (
                 <tr
                   key={po.id}
-                  className="hover:bg-slate-50/80 dark:hover:bg-slate-800/50 transition-colors"
+                  className="hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors"
                 >
-                  <td className="py-3 px-4 font-mono font-bold text-indigo-600 dark:text-indigo-400">
+                  <td className="py-2.5 px-4 font-mono font-bold text-teal-700 dark:text-teal-400">
                     {po.poNumber}
                   </td>
-                  <td className="py-3 px-3 font-semibold text-slate-800 dark:text-slate-200">
+                  <td className="py-2.5 px-3 font-semibold text-slate-800 dark:text-slate-200">
                     {po.supplierName}
                   </td>
-                  <td className="py-3 px-3 text-slate-600 dark:text-slate-300">
+                  <td className="py-2.5 px-3 text-slate-600 dark:text-slate-300">
                     {po.targetLocationName}
                   </td>
-                  <td className="py-3 px-3 text-slate-500 dark:text-slate-400">
+                  <td className="py-2.5 px-3 text-slate-500 dark:text-slate-400 font-mono text-[11px]">
                     {po.orderDate}
                   </td>
-                  <td className="py-3 px-3">
+                  <td className="py-2.5 px-3">
                     <div className="flex flex-col gap-0.5">
                       {po.items.map((it, idx) => (
                         <span key={idx} className="text-[11px] text-slate-600 dark:text-slate-300">
-                          {it.orderedQty}× {it.name}
+                          <span className="font-mono font-bold text-teal-700 dark:text-teal-400">{it.orderedQty}x</span> {it.name}
                         </span>
                       ))}
                     </div>
                   </td>
-                  <td className="py-3 px-3 text-right font-mono font-bold text-slate-900 dark:text-white">
+                  <td className="py-2.5 px-3 text-right font-mono font-bold text-slate-900 dark:text-white">
                     {formatCurrency(po.totalAmount)}
                   </td>
-                  <td className="py-3 px-3 text-center">
+                  <td className="py-2.5 px-3 text-center">
                     {po.status === 'received' ? (
-                      <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2.5 py-0.5 text-xs font-semibold text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
-                        <CheckCircle2 className="h-3 w-3" /> Received (GRN)
+                      <span className="inline-flex items-center gap-1 rounded font-mono text-[10px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200 dark:bg-emerald-500/10 dark:text-emerald-400 dark:border-emerald-500/20 px-2 py-0.5">
+                        <IconCheck className="h-3 w-3" /> Received (GRN)
                       </span>
                     ) : (
-                      <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2.5 py-0.5 text-xs font-semibold text-amber-600 dark:text-amber-400 border border-amber-500/20">
-                        <Clock className="h-3 w-3" /> Pending Delivery
+                      <span className="inline-flex items-center gap-1 rounded font-mono text-[10px] font-bold bg-amber-50 text-amber-900 border border-amber-200 dark:bg-amber-500/10 dark:text-amber-400 dark:border-amber-500/20 px-2 py-0.5">
+                        <IconClock className="h-3 w-3" /> Pending Delivery
                       </span>
                     )}
                   </td>
-                  <td className="py-3 px-4 text-center">
+                  <td className="py-2.5 px-4 text-center">
                     {po.status === 'pending' ? (
                       <button
+                        type="button"
                         onClick={() => setReceivingPO(po)}
-                        className="rounded-xl bg-emerald-600 hover:bg-emerald-700 px-3 py-1.5 text-xs font-semibold text-white shadow-sm shadow-emerald-600/20 transition-all"
+                        className="rounded-lg bg-emerald-700 hover:bg-emerald-800 px-3 py-1 text-xs font-bold text-white shadow-subtle transition-colors"
                       >
                         Receive Goods (GRN)
                       </button>
@@ -263,36 +319,36 @@ export const PurchaseOrders: React.FC = () => {
       <Modal
         isOpen={Boolean(receivingPO)}
         onClose={() => setReceivingPO(null)}
-        title={`Process Goods Receipt Note (GRN) — ${receivingPO?.poNumber}`}
+        title={`Process Goods Receipt Note (GRN): ${receivingPO?.poNumber}`}
         subtitle={`Receiving goods into ${receivingPO?.targetLocationName} automatically writes IN movements to ledger`}
         maxWidth="lg"
       >
         {receivingPO && (
           <div className="space-y-4">
-            <div className="rounded-xl border border-indigo-500/20 bg-indigo-500/5 p-3 text-xs text-indigo-700 dark:text-indigo-300">
+            <div className="rounded-lg border border-teal-500/25 bg-teal-500/10 p-3 text-xs text-teal-800 dark:text-teal-300">
               Confirming receipt will instantly increment stock counts and write immutable ledger
               transactions with unit cost stamps.
             </div>
 
             <div>
-              <h4 className="text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-2">
+              <h4 className="text-xs font-mono font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-2">
                 Items Being Received
               </h4>
-              <div className="divide-y divide-slate-100 dark:divide-slate-800 rounded-xl border border-slate-200 dark:border-slate-800 p-2">
+              <div className="divide-y divide-slate-100 dark:divide-slate-800 rounded-lg border border-slate-200 dark:border-slate-800 p-2 bg-[#F4F5F8] dark:bg-[#0C1017]">
                 {receivingPO.items.map((it, idx) => (
                   <div key={idx} className="flex items-center justify-between py-2 px-2 text-xs">
                     <div>
                       <div className="font-bold text-slate-800 dark:text-slate-200">{it.name}</div>
-                      <div className="font-mono text-[10px] text-indigo-600 dark:text-indigo-400">
+                      <div className="font-mono text-[10px] text-teal-700 dark:text-teal-400">
                         {it.sku}
                       </div>
                     </div>
                     <div className="text-right">
-                      <div className="font-mono font-bold text-emerald-600 dark:text-emerald-400">
-                        +{it.orderedQty} units
+                      <div className="font-mono font-bold text-slate-900 dark:text-white">
+                        {it.orderedQty} units
                       </div>
-                      <div className="text-[10px] text-slate-400">
-                        @ {formatCurrency(it.unitCost)}/unit
+                      <div className="text-[10px] text-slate-400 font-mono">
+                        @{formatCurrency(it.unitCost)} / unit
                       </div>
                     </div>
                   </div>
@@ -302,56 +358,58 @@ export const PurchaseOrders: React.FC = () => {
 
             <div>
               <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                Receipt Inspection & Warehouse Notes
+                Receiving / Inspection Notes
               </label>
-              <textarea
-                rows={2}
+              <input
+                type="text"
                 value={grnNotes}
                 onChange={(e) => setGrnNotes(e.target.value)}
-                placeholder="Cartons verified in good condition, seal intact..."
-                className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-3 py-2 text-xs focus:outline-none"
+                placeholder="e.g. Delivered by Freight Truck #410; all boxes verified undamaged"
+                className="w-full rounded-lg border border-slate-200 dark:border-slate-800 bg-[#F4F5F8] dark:bg-[#131924] px-3 py-2 text-xs focus:outline-none focus:ring-1 focus:ring-teal-600"
               />
             </div>
 
             <div className="flex justify-end gap-3 pt-3 border-t border-slate-100 dark:border-slate-800">
               <button
+                type="button"
                 onClick={() => setReceivingPO(null)}
-                className="rounded-xl border border-slate-200 dark:border-slate-700 px-4 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300"
+                className="rounded-lg border border-slate-200 dark:border-slate-800 px-4 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
               >
                 Cancel
               </button>
               <button
+                type="button"
                 onClick={handleConfirmGRN}
-                className="rounded-xl bg-emerald-600 hover:bg-emerald-700 px-5 py-2 text-xs font-semibold text-white shadow-md shadow-emerald-600/20"
+                className="rounded-lg bg-emerald-700 hover:bg-emerald-800 px-5 py-2 text-xs font-bold text-white shadow-subtle transition-colors"
               >
-                Confirm Receipt & Write to Ledger
+                Confirm Receipt & Post to Ledger
               </button>
             </div>
           </div>
         )}
       </Modal>
 
-      {/* Create PO Modal */}
+      {/* Create Purchase Order Modal */}
       <Modal
         isOpen={isCreateModalOpen}
         onClose={() => setIsCreateModalOpen(false)}
-        title="Create New Purchase Order"
-        subtitle="Specify supplier, receiving warehouse, and item quantities"
+        title="Create Purchase Order (PO)"
+        subtitle="Issues a formal replenishment order to a qualified supplier"
         maxWidth="2xl"
       >
-        <form onSubmit={handleCreatePOSubmit} className="space-y-4">
+        <form onSubmit={handleSubmitPO} className="space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <div className="sm:col-span-2">
+            <div>
               <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                Supplier / Vendor Name *
+                Supplier / Vendor *
               </label>
               <input
                 type="text"
                 required
                 value={supplierName}
                 onChange={(e) => setSupplierName(e.target.value)}
-                placeholder="e.g. AeroCraft Industrial Supplies"
-                className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-3 py-2 text-xs focus:outline-none"
+                placeholder="e.g. Apex Industrial Supplies"
+                className="w-full rounded-lg border border-slate-200 dark:border-slate-800 bg-[#F4F5F8] dark:bg-[#131924] px-3 py-2 text-xs focus:outline-none focus:ring-1 focus:ring-teal-600"
               />
             </div>
 
@@ -359,127 +417,170 @@ export const PurchaseOrders: React.FC = () => {
               <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
                 Receiving Warehouse *
               </label>
-              <select
-                value={targetLocationId}
-                onChange={(e) => setTargetLocationId(e.target.value)}
-                className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-3 py-2 text-xs focus:outline-none"
-              >
-                {locations.map((loc) => (
-                  <option key={loc.id} value={loc.id}>
-                    {loc.code} — {loc.name}
-                  </option>
-                ))}
-              </select>
+              <WarehouseSelectDropdown
+                locations={locations}
+                selectedLocationId={targetLocationId}
+                onSelect={setTargetLocationId}
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                Order Date
+              </label>
+              <input
+                type="date"
+                value={orderDate}
+                onChange={(e) => setOrderDate(e.target.value)}
+                className="w-full rounded-lg border border-slate-200 dark:border-slate-800 bg-[#F4F5F8] dark:bg-[#131924] px-3 py-2 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-teal-600"
+              />
             </div>
           </div>
 
-          {/* Line Items */}
-          <div className="border-t border-slate-100 dark:border-slate-800 pt-3">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-xs font-bold uppercase tracking-wider text-slate-400">
-                Order Line Items
+          {/* Line items editor */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-slate-700 dark:text-slate-300">
+                Line Items
               </span>
               <button
                 type="button"
                 onClick={handleAddLineItem}
-                className="text-xs font-bold text-indigo-600 dark:text-indigo-400 hover:underline"
+                className="flex items-center gap-1 text-xs font-bold text-teal-700 dark:text-teal-400 hover:underline"
               >
-                + Add Another SKU
+                <IconPlus className="h-3.5 w-3.5" /> Add SKU
               </button>
             </div>
 
-            <div className="space-y-2 max-h-52 overflow-y-auto pr-1">
-              {lineItems.map((item, idx) => (
-                <div
-                  key={idx}
-                  className="flex items-center gap-2 rounded-xl border border-slate-200 dark:border-slate-700 p-2 text-xs bg-slate-50/50 dark:bg-slate-800/40"
-                >
-                  <div className="flex-1">
-                    <select
-                      value={item.productId}
-                      onChange={(e) => handleProductChange(idx, e.target.value)}
-                      className="w-full rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 p-1.5 text-xs font-medium"
-                    >
-                      {products.map((p) => (
-                        <option key={p.id} value={p.id}>
-                          {p.sku} — {p.name}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div className="w-24">
-                    <input
-                      type="number"
-                      min="1"
-                      value={item.orderedQty}
-                      onChange={(e) =>
-                        handleItemChange(idx, 'orderedQty', parseInt(e.target.value, 10) || 1)
-                      }
-                      placeholder="Qty"
-                      className="w-full rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 p-1.5 text-xs font-mono font-bold"
-                    />
-                  </div>
-
-                  <div className="w-28">
-                    <input
-                      type="number"
-                      step="0.01"
-                      value={item.unitCost}
-                      onChange={(e) =>
-                        handleItemChange(idx, 'unitCost', parseFloat(e.target.value) || 0)
-                      }
-                      placeholder="Cost"
-                      className="w-full rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 p-1.5 text-xs font-mono"
-                    />
-                  </div>
-
-                  <button
-                    type="button"
-                    disabled={lineItems.length === 1}
-                    onClick={() => handleRemoveLineItem(idx)}
-                    className="p-1 text-slate-400 hover:text-rose-500 disabled:opacity-30"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </button>
-                </div>
-              ))}
+            {/* Table headers */}
+            <div className="hidden sm:flex items-center gap-2 px-1 text-[10px] font-semibold text-slate-500 uppercase tracking-wider">
+              <span className="flex-1 min-w-0">Product Catalog</span>
+              <span className="w-24 shrink-0 text-center">Qty</span>
+              <span className="w-28 shrink-0 text-center">Unit Cost</span>
+              <span className="w-24 shrink-0 text-right">Line Total</span>
+              {lineItems.length > 1 && <span className="w-6 shrink-0"></span>}
             </div>
 
-            <div className="flex justify-between items-center mt-3 pt-2 border-t border-slate-100 dark:border-slate-800 text-xs font-bold">
-              <span className="text-slate-500">Calculated PO Total:</span>
-              <span className="font-mono text-sm text-indigo-600 dark:text-indigo-400">
-                {formatCurrency(calculateTotal())}
-              </span>
+            <div className="space-y-2">
+              {lineItems.map((item, index) => {
+                const prod = products.find((p) => p.id === item.productId);
+                const currentWarehouseStock = targetLocationId
+                  ? (prod?.locationStock?.[targetLocationId] ?? 0)
+                  : (prod?.currentStock ?? 0);
+                const postReceiptStock = currentWarehouseStock + (item.orderedQty || 0);
+                const isOverCapacity = Boolean(
+                  prod && prod.maxStock && prod.maxStock > 0 && postReceiptStock > prod.maxStock
+                );
+
+                return (
+                  <div
+                    key={index}
+                    className="p-2.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-[#F4F5F8] dark:bg-[#0C1017] space-y-1.5"
+                  >
+                    <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+                      <div className="w-full sm:flex-1 sm:min-w-0">
+                        <ProductSearchDropdown
+                          products={products}
+                          selectedProductId={item.productId}
+                          onSelect={(p) => handleProductSelect(index, p.id)}
+                          warehouseId={targetLocationId}
+                          formatCurrency={formatCurrency}
+                          priceType="cost"
+                        />
+                      </div>
+
+                      <div className="flex items-center gap-2 w-full sm:w-auto justify-between sm:justify-start">
+                        <div className="w-20 sm:w-24 shrink-0">
+                          <input
+                            type="number"
+                            min="1"
+                            placeholder="Qty"
+                            value={item.orderedQty}
+                            onChange={(e) =>
+                              handleUpdateItem(index, {
+                                orderedQty: parseInt(e.target.value, 10) || 1,
+                              })
+                            }
+                            className="w-full rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#131924] px-2 py-1.5 text-xs text-slate-800 dark:text-slate-200 font-mono focus:outline-none focus:ring-1 focus:ring-teal-600 text-center"
+                          />
+                        </div>
+
+                        <div className="w-24 sm:w-28 shrink-0">
+                          <input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            placeholder="Unit Cost"
+                            value={item.unitCost}
+                            onChange={(e) =>
+                              handleUpdateItem(index, {
+                                unitCost: parseFloat(e.target.value) || 0,
+                              })
+                            }
+                            className="w-full rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#131924] px-2 py-1.5 text-xs text-slate-800 dark:text-slate-200 font-mono focus:outline-none focus:ring-1 focus:ring-teal-600 text-right"
+                          />
+                        </div>
+
+                        <div className="w-24 shrink-0 text-right font-mono font-bold text-xs text-slate-800 dark:text-slate-200">
+                          {formatCurrency((item.orderedQty || 0) * (item.unitCost || 0))}
+                        </div>
+
+                        {lineItems.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveItem(index)}
+                            className="p-1 shrink-0 rounded text-slate-400 hover:text-rose-500 transition-colors"
+                            title="Remove Item"
+                          >
+                            <IconTrash2 className="h-4 w-4" />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Warehouse stock info / over-capacity notice */}
+                    {isOverCapacity && (
+                      <div className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-amber-500/10 border border-amber-500/25 text-amber-700 dark:text-amber-400 text-[11px] font-medium">
+                        <IconAlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-600 dark:text-amber-400" />
+                        <span>
+                          Notice: Receiving {item.orderedQty} units will push warehouse stock to {postReceiptStock} {prod?.unitOfMeasure} (exceeds max capacity threshold of {prod?.maxStock} {prod?.unitOfMeasure}).
+                        </span>
+                      </div>
+                    )}
+                    {currentWarehouseStock === 0 && (
+                      <div className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-teal-500/10 border border-teal-500/20 text-teal-700 dark:text-teal-400 text-[11px] font-medium">
+                        <IconPackage className="h-3.5 w-3.5 shrink-0 text-teal-600 dark:text-teal-400" />
+                        <span>
+                          Restock Notice: Current warehouse stock is 0 {prod?.unitOfMeasure}. This PO will replenish {item.orderedQty} {prod?.unitOfMeasure}.
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           </div>
 
-          <div>
-            <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-              Order Notes / Delivery Terms
-            </label>
-            <input
-              type="text"
-              value={poNotes}
-              onChange={(e) => setPoNotes(e.target.value)}
-              placeholder="e.g. Deliver via freight dock 3, Net 30"
-              className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-3 py-2 text-xs focus:outline-none"
-            />
+          <div className="flex items-center justify-between pt-2 border-t border-slate-100 dark:border-slate-800 text-sm">
+            <span className="font-semibold text-slate-600 dark:text-slate-400">Grand Total</span>
+            <span className="font-mono font-bold text-base text-slate-900 dark:text-white">
+              {formatCurrency(calculateGrandTotal())}
+            </span>
           </div>
 
           <div className="flex justify-end gap-3 pt-3 border-t border-slate-100 dark:border-slate-800">
             <button
               type="button"
               onClick={() => setIsCreateModalOpen(false)}
-              className="rounded-xl border border-slate-200 dark:border-slate-700 px-4 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300"
+              className="rounded-lg border border-slate-200 dark:border-slate-800 px-4 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
             >
               Cancel
             </button>
             <button
               type="submit"
-              className="rounded-xl bg-indigo-600 hover:bg-indigo-700 px-5 py-2 text-xs font-semibold text-white shadow-md shadow-indigo-600/20"
+              className="rounded-lg bg-teal-700 hover:bg-teal-800 px-5 py-2 text-xs font-bold text-white shadow-subtle transition-colors"
             >
-              Issue Purchase Order
+              Submit Order to Supplier
             </button>
           </div>
         </form>

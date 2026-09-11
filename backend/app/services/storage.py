@@ -71,12 +71,49 @@ class StorageService:
         return response
 
     @classmethod
+    def get_file_bytes(cls, object_name: str) -> Optional[bytes]:
+        """Fetch raw bytes for an object from MinIO with safe error handling."""
+        try:
+            client = cls.get_client()
+            response = client.get_object(BUCKET_NAME, object_name)
+            try:
+                data = response.read()
+                return data
+            finally:
+                response.close()
+                response.release_conn()
+        except Exception as e:
+            print(f"[MinIO Storage] Object {object_name} read error: {e}")
+            return None
+
+    @classmethod
+    def file_exists(cls, object_name: str) -> bool:
+        """Check if an object exists in MinIO bucket."""
+        try:
+            client = cls.get_client()
+            client.stat_object(BUCKET_NAME, object_name)
+            return True
+        except Exception:
+            return False
+
+    @classmethod
+    def delete_file(cls, object_name: str) -> bool:
+        """Remove an object from MinIO bucket."""
+        try:
+            client = cls.get_client()
+            client.remove_object(BUCKET_NAME, object_name)
+            return True
+        except Exception as e:
+            print(f"[MinIO Storage] Error deleting {object_name}: {e}")
+            return False
+
+    @classmethod
     def list_files(cls) -> List[Dict[str, Any]]:
         client = cls.get_client()
         try:
             if not client.bucket_exists(BUCKET_NAME):
                 return []
-            objects = client.list_objects(BUCKET_NAME)
+            objects = client.list_objects(BUCKET_NAME, recursive=True)
             return [
                 {
                     "object_name": obj.object_name,

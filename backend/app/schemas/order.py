@@ -51,6 +51,7 @@ class SOLineItemCreate(BaseModel):
     product_id: UUID
     ordered_qty: float = Field(..., gt=0)
     unit_price: float = Field(..., ge=0)
+    discount_percent: Optional[float] = 0.0
 
 class SOLineItemResponse(SOLineItemCreate):
     id: UUID
@@ -63,6 +64,15 @@ class SOLineItemResponse(SOLineItemCreate):
 
 class SalesOrderCreate(BaseModel):
     customer_name: str = Field(..., max_length=255)
+    customer_gstin: Optional[str] = None
+    billing_address: Optional[str] = None
+    shipping_address: Optional[str] = None
+    state: Optional[str] = "Karnataka"
+    state_code: Optional[str] = "29"
+    billing_state: Optional[str] = None
+    billing_state_code: Optional[str] = None
+    shipping_state: Optional[str] = None
+    shipping_state_code: Optional[str] = None
     source_location_id: UUID
     order_date: Optional[datetime] = None
     notes: Optional[str] = None
@@ -73,6 +83,16 @@ class SalesOrderResponse(BaseModel):
     tenant_id: UUID
     so_number: str
     customer_name: str
+    customer_gstin: Optional[str] = None
+    billing_address: Optional[str] = None
+    shipping_address: Optional[str] = None
+    state: Optional[str] = "Karnataka"
+    state_code: Optional[str] = "29"
+    billing_state: Optional[str] = None
+    billing_state_code: Optional[str] = None
+    shipping_state: Optional[str] = None
+    shipping_state_code: Optional[str] = None
+    invoice_id: Optional[UUID] = None
     status: OrderStatus
     source_location_id: UUID
     source_location_name: Optional[str] = None

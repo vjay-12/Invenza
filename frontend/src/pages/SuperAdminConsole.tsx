@@ -1,69 +1,77 @@
 import React, { useState, useEffect } from 'react';
 import {
-  Building2,
-  Plus,
-  Search,
-  CheckCircle2,
-  XCircle,
-  BarChart3,
-  Edit,
-  Power,
-  Shield,
-  Send,
-  Eye,
-  EyeOff,
-  RefreshCw,
-  Sliders,
-  FileText,
-  Download,
-  AlertCircle,
-  Package,
-  Users,
-  MapPin,
-  DollarSign,
-  Layers,
-  Sparkles,
-  Key,
-} from 'lucide-react';
+  IconBuilding as Building2,
+  IconPlus as Plus,
+  IconSearch as Search,
+  IconCheck as CheckCircle2,
+  IconX as XCircle,
+  IconBarChart3 as BarChart3,
+  IconEdit as Edit,
+  IconPower as Power,
+  IconPowerOff as PowerOff,
+  IconBan as Ban,
+  IconShieldCheck as Shield,
+  IconSend as Send,
+  IconEye as Eye,
+  IconEyeOff as EyeOff,
+  IconRefreshCw as RefreshCw,
+  IconSlidersHorizontal as Sliders,
+  IconFileText as FileText,
+  IconDownload as Download,
+  IconAlertCircle as AlertCircle,
+  IconPackage as Package,
+  IconUsers as Users,
+  IconMapPin as MapPin,
+  IconIndianRupee as IndianRupee,
+  IconLayers as Layers,
+  IconKey as Sparkles,
+  IconKey as Key,
+  IconLock as Lock,
+  IconClock as Clock,
+  IconAlertTriangle as AlertTriangle,
+  IconArchive as Archive,
+  IconMessageCircle as MessageCircle,
+  IconCalculator as Calculator,
+  IconPhone as Phone,
+  IconMail as Mail,
+} from '../components/icons';
 import { api } from '../services/api';
+import { PageMeta } from '../components/common/PageMeta';
+import { SimpleSelectDropdown, DropdownOption } from '../components/common/SimpleSelectDropdown';
+import { INDUSTRIES_LIST, AVAILABLE_MODULES } from '../data/platformConstants';
+export { INDUSTRIES_LIST, AVAILABLE_MODULES };
 
-export const INDUSTRIES_LIST = [
-  'Retail & E-commerce',
-  'Pharmaceuticals & Healthcare',
-  'Manufacturing & Assembly',
-  'Food & Beverage',
-  'Electronics & High-Tech',
-  'Logistics & Warehousing',
-  'Chemicals & Energy',
-  'Fashion & Apparel',
-  'Construction & Materials',
-  'Automotive & Aerospace',
-  'General Merchandise',
-];
-
-export const AVAILABLE_MODULES = [
-  { id: 'products', label: 'Products & SKUs', desc: 'Item catalog, categories, pricing, variants' },
-  { id: 'locations', label: 'Warehouses & Locations', desc: 'Storage bins, facilities, capacities' },
-  { id: 'orders', label: 'Purchase & Sales Orders', desc: 'PO receipt (GRN) and SO fulfillment' },
-  { id: 'transfers', label: 'Stock Transfers', desc: 'Inter-warehouse movement logs' },
-  { id: 'adjustments', label: 'Manual Adjustments', desc: 'Cycle counting and shrinkage reason codes' },
-  { id: 'ledger', label: 'Immutable Audit Ledger', desc: 'Cryptographic append-only movement stream' },
-  { id: 'reports', label: 'Valuation & Reports', desc: 'FIFO and Weighted Average costing analytics' },
-  { id: 'storage', label: 'MinIO Document Storage', desc: 'Compliance certificates & file uploads' },
-];
-
-export const SuperAdminConsole: React.FC = () => {
+export const SuperAdminConsole: React.FC<{
+  onNavigate?: (tab: string, params?: Record<string, string>) => void;
+}> = ({ onNavigate }) => {
   const [companies, setCompanies] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isRefreshingCompanies, setIsRefreshingCompanies] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedIndustry, setSelectedIndustry] = useState('all');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'deactivated'>('all');
   const [toastMessage, setToastMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  // Prospective Leads State
+  const [leads, setLeads] = useState<any[]>([]);
+  const [isLoadingLeads, setIsLoadingLeads] = useState(false);
+  const [leadStatusFilter, setLeadStatusFilter] = useState<string>('all');
+  const [activeLeadForProvisioning, setActiveLeadForProvisioning] = useState<any | null>(null);
+  const [hoveredLead, setHoveredLead] = useState<{ lead: any; rect: DOMRect } | null>(null);
+
+  // Deactivate/Activate Organization Modal State
+  const [isDeactivateModalOpen, setIsDeactivateModalOpen] = useState(false);
+  const [companyToDeactivate, setCompanyToDeactivate] = useState<any | null>(null);
+  const [isDeactivating, setIsDeactivating] = useState(false);
 
   // Modal States
   const [isProvisionModalOpen, setIsProvisionModalOpen] = useState(false);
   const [isAnalyticsModalOpen, setIsAnalyticsModalOpen] = useState(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [isReportModalOpen, setIsReportModalOpen] = useState(false);
+  const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
+  const [selectedCompanyForDetail, setSelectedCompanyForDetail] = useState<any | null>(null);
+  const [hoveredCompany, setHoveredCompany] = useState<{ company: any; rect: DOMRect } | null>(null);
 
   const [activeCompanyForAnalytics, setActiveCompanyForAnalytics] = useState<any>(null);
   const [analyticsData, setAnalyticsData] = useState<any>(null);
@@ -72,9 +80,12 @@ export const SuperAdminConsole: React.FC = () => {
 
   // Provision Form State
   const [provCompanyName, setProvCompanyName] = useState('');
+  const [provCompanyCode, setProvCompanyCode] = useState('');
   const [provIndustry, setProvIndustry] = useState(INDUSTRIES_LIST[0]);
   const [provLocation, setProvLocation] = useState('');
-  const [provCurrency, setProvCurrency] = useState('USD');
+  const [provCurrency, setProvCurrency] = useState('INR');
+  const [provSetupFee, setProvSetupFee] = useState('25000');
+  const [provMonthlyRate, setProvMonthlyRate] = useState('4500');
   const [provAdminName, setProvAdminName] = useState('');
   const [provAdminEmail, setProvAdminEmail] = useState('');
   const [provAdminPassword, setProvAdminPassword] = useState('');
@@ -85,9 +96,56 @@ export const SuperAdminConsole: React.FC = () => {
   const [provSendEmail, setProvSendEmail] = useState(true);
   const [isSubmittingProvision, setIsSubmittingProvision] = useState(false);
 
+  // Security Purge Requests State
+  const [purgeRequests, setPurgeRequests] = useState<any[]>([]);
+  const [isLoadingPurgeRequests, setIsLoadingPurgeRequests] = useState(false);
+  const [processingPurgeId, setProcessingPurgeId] = useState<string | null>(null);
+
   const showToast = (text: string, type: 'success' | 'error' = 'success') => {
     setToastMessage({ text, type });
     setTimeout(() => setToastMessage(null), 5000);
+  };
+
+  const loadPurgeRequests = async () => {
+    setIsLoadingPurgeRequests(true);
+    try {
+      const data = await api.getLedgerPurgeRequests();
+      if (data) {
+        setPurgeRequests(data);
+      }
+    } catch (err) {
+      console.warn('Failed to load ledger purge requests:', err);
+    } finally {
+      setIsLoadingPurgeRequests(false);
+    }
+  };
+
+  const handleApprovePurge = async (reqId: string) => {
+    setProcessingPurgeId(reqId);
+    try {
+      await api.approveLedgerPurge(reqId);
+      showToast('Movement Ledger purge approved and executed. Audit record preserved.', 'success');
+      loadPurgeRequests();
+    } catch (err: any) {
+      showToast(err.message || 'Failed to approve purge request', 'error');
+    } finally {
+      setProcessingPurgeId(null);
+    }
+  };
+
+  const handleRejectPurge = async (reqId: string) => {
+    const reason = window.prompt('Enter reason for rejecting purge request:', 'Rejected by Super Administrator');
+    if (reason === null) return;
+    setProcessingPurgeId(reqId);
+    try {
+      await api.rejectLedgerPurge(reqId, reason);
+      showToast('Purge request rejected.', 'success');
+      loadPurgeRequests();
+    } catch (err: any) {
+      showToast(err.message || 'Failed to reject purge request', 'error');
+    } finally {
+      setProcessingPurgeId(null);
+    }
   };
 
   const loadCompanies = async () => {
@@ -107,13 +165,104 @@ export const SuperAdminConsole: React.FC = () => {
     }
   };
 
+  const handleRefreshCompanies = async () => {
+    setIsRefreshingCompanies(true);
+    const startTime = Date.now();
+    try {
+      await loadCompanies();
+    } finally {
+      const elapsed = Date.now() - startTime;
+      const minSpinMs = 700;
+      if (elapsed < minSpinMs) {
+        setTimeout(() => setIsRefreshingCompanies(false), minSpinMs - elapsed);
+      } else {
+        setIsRefreshingCompanies(false);
+      }
+    }
+  };
+
+  const loadLeads = async () => {
+    setIsLoadingLeads(true);
+    try {
+      const data = await api.getLeads(leadStatusFilter !== 'all' ? leadStatusFilter : undefined);
+      if (data) {
+        setLeads(data);
+      }
+    } catch (err) {
+      console.warn('Failed to load leads:', err);
+    } finally {
+      setIsLoadingLeads(false);
+    }
+  };
+
   useEffect(() => {
     loadCompanies();
-  }, [selectedIndustry]);
+    loadPurgeRequests();
+    loadLeads();
+  }, [selectedIndustry, leadStatusFilter]);
+
+  useEffect(() => {
+    const handleScroll = () => {
+      if (hoveredCompany) setHoveredCompany(null);
+    };
+    window.addEventListener('scroll', handleScroll, true);
+    return () => window.removeEventListener('scroll', handleScroll, true);
+  }, [hoveredCompany]);
 
   const handleSearchSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     loadCompanies();
+  };
+
+  const handleOpenDeactivateConfirm = (company: any) => {
+    setCompanyToDeactivate(company);
+    setIsDeactivateModalOpen(true);
+  };
+
+  const handleConfirmDeactivateToggle = async () => {
+    if (!companyToDeactivate) return;
+    setIsDeactivating(true);
+    try {
+      const willDeactivate = companyToDeactivate.is_active && !companyToDeactivate.is_archived;
+      const res = await api.archiveCompany(companyToDeactivate.id, willDeactivate);
+      showToast(res.message || (willDeactivate ? `Company '${companyToDeactivate.name}' deactivated. Platform access suspended.` : `Company '${companyToDeactivate.name}' activated. Platform access restored.`));
+      setIsDeactivateModalOpen(false);
+      setCompanyToDeactivate(null);
+      loadCompanies();
+    } catch (err: any) {
+      showToast(err.message || 'Failed to update organization status', 'error');
+    } finally {
+      setIsDeactivating(false);
+    }
+  };
+
+  const handleUpdateLeadStatus = async (leadId: string, status: string) => {
+    try {
+      await api.updateLeadStatus(leadId, status);
+      showToast(`Lead status updated to '${status}'.`);
+      loadLeads();
+    } catch (err: any) {
+      showToast(err.message || 'Failed to update lead status', 'error');
+    }
+  };
+
+  const handleProvisionFromLead = (lead: any) => {
+    setActiveLeadForProvisioning(lead);
+    setProvCompanyName(lead.company_name || '');
+    setProvCompanyCode(lead.company_code || '');
+    setProvIndustry(lead.industry || INDUSTRIES_LIST[0]);
+    setProvLocation(lead.location || 'Headquarters');
+    setProvCurrency('INR');
+    setProvSetupFee(lead.quoted_amount ? String(lead.quoted_amount) : '25000');
+    setProvMonthlyRate('4500');
+    setProvAdminName(lead.contact_name || '');
+    setProvAdminEmail(lead.email || '');
+    setProvModules(lead.selected_modules && lead.selected_modules.length > 0 ? lead.selected_modules : [
+      'products', 'locations', 'orders', 'transfers', 'adjustments', 'ledger', 'reports', 'storage'
+    ]);
+    generateRandomPassword();
+    setProvSendEmail(true);
+    setIsProvisionModalOpen(true);
   };
 
   const generateRandomPassword = () => {
@@ -133,13 +282,28 @@ export const SuperAdminConsole: React.FC = () => {
       return;
     }
 
+    const setupFeeNum = parseFloat(provSetupFee);
+    const monthlyRateNum = parseFloat(provMonthlyRate);
+    if (isNaN(setupFeeNum) || setupFeeNum < 0) {
+      showToast('Please enter a valid non-negative Setup Fee amount.', 'error');
+      return;
+    }
+    if (isNaN(monthlyRateNum) || monthlyRateNum < 0) {
+      showToast('Please enter a valid non-negative Monthly Maintenance Rate (can be ₹0).', 'error');
+      return;
+    }
+
     setIsSubmittingProvision(true);
     try {
       await api.provisionCompany({
         company_name: provCompanyName.trim(),
+        company_code: provCompanyCode.trim() || undefined,
+        unique_code: provCompanyCode.trim() || undefined,
         industry: provIndustry,
         location: provLocation.trim() || 'Headquarters',
         currency_code: provCurrency,
+        setup_fee: setupFeeNum,
+        monthly_maintenance_fee: monthlyRateNum,
         admin_full_name: provAdminName.trim(),
         admin_email: provAdminEmail.trim().toLowerCase(),
         admin_password: provAdminPassword.trim(),
@@ -147,7 +311,17 @@ export const SuperAdminConsole: React.FC = () => {
         send_email: provSendEmail,
       });
 
-      showToast(`Company '${provCompanyName}' provisioned! Welcome email dispatched to ${provAdminEmail}.`);
+      if (activeLeadForProvisioning) {
+        try {
+          await api.updateLeadStatus(activeLeadForProvisioning.id, 'converted');
+        } catch (e) {
+          console.warn('Could not update lead status to converted:', e);
+        }
+        setActiveLeadForProvisioning(null);
+        loadLeads();
+      }
+
+      showToast(`Company '${provCompanyName}' provisioned! Commercial subscription initialized.`);
       setIsProvisionModalOpen(false);
       resetProvisionForm();
       loadCompanies();
@@ -159,10 +333,14 @@ export const SuperAdminConsole: React.FC = () => {
   };
 
   const resetProvisionForm = () => {
+    setActiveLeadForProvisioning(null);
     setProvCompanyName('');
+    setProvCompanyCode('');
     setProvIndustry(INDUSTRIES_LIST[0]);
     setProvLocation('');
-    setProvCurrency('USD');
+    setProvCurrency('INR');
+    setProvSetupFee('25000');
+    setProvMonthlyRate('4500');
     setProvAdminName('');
     setProvAdminEmail('');
     setProvAdminPassword('');
@@ -182,6 +360,11 @@ export const SuperAdminConsole: React.FC = () => {
     }
   };
 
+  const handleOpenDetail = (company: any) => {
+    setSelectedCompanyForDetail(company);
+    setIsDetailModalOpen(true);
+  };
+
   const handleOpenAnalytics = async (company: any) => {
     setActiveCompanyForAnalytics(company);
     setIsAnalyticsModalOpen(true);
@@ -197,6 +380,7 @@ export const SuperAdminConsole: React.FC = () => {
   const handleOpenEdit = (company: any) => {
     setCompanyToEdit({
       ...company,
+      unique_code: company.unique_code || company.company_code || '',
       enabled_modules: company.enabled_modules || [],
     });
     setIsEditModalOpen(true);
@@ -208,6 +392,8 @@ export const SuperAdminConsole: React.FC = () => {
     try {
       await api.updateCompany(companyToEdit.id, {
         name: companyToEdit.name,
+        company_code: companyToEdit.unique_code || companyToEdit.company_code,
+        unique_code: companyToEdit.unique_code || companyToEdit.company_code,
         industry: companyToEdit.industry,
         location: companyToEdit.location,
         currency_code: companyToEdit.currency_code,
@@ -270,15 +456,48 @@ export const SuperAdminConsole: React.FC = () => {
 
   // KPIs
   const totalCompaniesCount = companies.length;
-  const activeCount = companies.filter((c) => c.is_active).length;
+  const activeCount = companies.filter((c) => c.is_active && !c.is_archived).length;
+  const deactivatedCount = companies.filter((c) => !c.is_active || c.is_archived).length;
   const totalIndustriesCount = new Set(companies.map((c) => c.industry)).size;
   const totalProductsAcross = companies.reduce((acc, c) => acc + (c.product_count || 0), 0);
+  const pendingLeadsCount = leads.filter((l) => l.status === 'pending').length;
+
+  const displayedCompanies = companies.filter((c) => {
+    if (statusFilter === 'active') return c.is_active && !c.is_archived;
+    if (statusFilter === 'deactivated') return !c.is_active || c.is_archived;
+    return true;
+  });
+
+  const industryFilterOptions: DropdownOption[] = [
+    { value: 'all', label: 'All Industries' },
+    ...INDUSTRIES_LIST.map((ind) => ({ value: ind, label: ind })),
+  ];
+
+  const statusFilterOptions: DropdownOption[] = [
+    { value: 'all', label: `All Status (${companies.length})` },
+    { value: 'active', label: `Active Only (${activeCount})` },
+    { value: 'deactivated', label: `Deactivated Only (${deactivatedCount})` },
+  ];
+
+  const leadFilterOptions: DropdownOption[] = [
+    { value: 'all', label: 'All Inquiries' },
+    { value: 'pending', label: 'Pending Action' },
+    { value: 'contacted', label: 'Contacted' },
+    { value: 'negotiating', label: 'Negotiating Offline' },
+    { value: 'converted', label: 'Converted to Tenant' },
+    { value: 'declined', label: 'Declined' },
+  ];
 
   return (
-    <div className="space-y-8 animate-in fade-in duration-300 pb-12">
+    <div className="space-y-4 sm:space-y-4.5 animate-in fade-in duration-200 pb-2">
+      <PageMeta
+        title="Super Admin Tenant Console | Invenza Platform"
+        description="Master administration console for cross-company provisioning, industry module toggles, and tenant lifecycle oversight."
+        canonicalPath="/companies"
+      />
       {/* Toast Notification */}
       {toastMessage && (
-        <div className={`fixed top-5 right-5 z-50 px-4 py-3 rounded-2xl shadow-2xl flex items-center gap-3 border text-sm font-semibold animate-in slide-in-from-top duration-200 ${
+        <div className={`fixed top-5 right-5 z-50 px-4 py-3 rounded-xl shadow-2xl flex items-center gap-3 border text-sm font-semibold animate-in slide-in-from-top duration-200 ${
           toastMessage.type === 'success'
             ? 'bg-emerald-950/90 border-emerald-500/40 text-emerald-300 backdrop-blur-xl'
             : 'bg-rose-950/90 border-rose-500/40 text-rose-300 backdrop-blur-xl'
@@ -292,264 +511,373 @@ export const SuperAdminConsole: React.FC = () => {
         </div>
       )}
 
-      {/* Header Banner */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 p-6 sm:p-8 rounded-3xl bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 border border-slate-800 relative overflow-hidden shadow-xl">
-        <div className="absolute -right-20 -top-20 w-80 h-80 bg-indigo-500/10 rounded-full blur-3xl pointer-events-none" />
-        <div className="relative z-10">
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-indigo-500/20 text-indigo-400 text-xs font-semibold border border-indigo-500/30 mb-3">
+      {/* Header Banner - Compact, Clean, Architectural Surface */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-3.5 p-3.5 sm:p-4 rounded-xl bg-white dark:bg-[#131924] border border-slate-200 dark:border-slate-800 shadow-card">
+        <div>
+          <div className="flex items-center gap-1.5 text-xs font-mono font-medium text-teal-600 dark:text-teal-400 mb-1">
             <Shield className="w-3.5 h-3.5" />
             <span>Master Super Administrator Core</span>
           </div>
-          <h1 className="text-2xl sm:text-3xl font-black tracking-tight text-white">
+          <h1 className="text-lg sm:text-xl font-bold tracking-tight text-slate-900 dark:text-white">
             Enterprise Company & Tenant Management
           </h1>
-          <p className="text-sm text-slate-400 mt-1 max-w-2xl">
+          <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 max-w-2xl leading-relaxed">
             Provision dedicated organizations by industry, manage tenant lifecycles, inspect live cross-company analytics, and dispatch admin credentials.
           </p>
         </div>
 
-        <div className="flex items-center gap-3 relative z-10">
+        <div className="flex items-center gap-2.5 relative z-10 shrink-0">
           <button
+            type="button"
             onClick={handleOpenReport}
-            className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs font-bold flex items-center gap-2 transition-all"
+            className="px-3.5 py-2 rounded-lg bg-white dark:bg-[#131924] hover:bg-slate-100 dark:hover:bg-[#1A2232] border border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-200 text-xs font-semibold flex items-center gap-2 transition-all shadow-subtle"
           >
-            <FileText className="w-4 h-4 text-indigo-400" />
+            <FileText className="w-3.5 h-3.5 text-teal-500 dark:text-teal-400" />
             <span>Platform Report</span>
           </button>
           <button
+            type="button"
             onClick={() => {
               generateRandomPassword();
               setIsProvisionModalOpen(true);
             }}
-            className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-indigo-600 via-indigo-500 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white text-xs font-bold shadow-lg shadow-indigo-500/20 flex items-center gap-2 transition-all"
+            className="px-4 py-2 rounded-lg bg-teal-700 hover:bg-teal-800 text-white text-xs font-bold shadow-subtle flex items-center gap-2 transition-all"
           >
-            <Plus className="w-4 h-4" />
+            <Plus className="w-3.5 h-3.5" />
             <span>Provision New Company</span>
           </button>
         </div>
       </div>
 
-      {/* KPI Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Total Companies</span>
-            <div className="p-2 rounded-xl bg-indigo-500/10 text-indigo-500">
-              <Building2 className="w-5 h-5" />
+      {/* Organizations Directory */}
+      <div className="space-y-3.5 sm:space-y-4">
+          {/* KPI Cards */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+            <div className="p-3.5 sm:p-4 rounded-xl bg-white dark:bg-[#131924] border border-slate-200 dark:border-slate-800/80 shadow-card">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] uppercase font-mono font-bold text-slate-500 dark:text-slate-400">Total Companies</span>
+                <div className="p-1.5 rounded-lg bg-teal-500/10 text-teal-700 dark:text-teal-400 border border-teal-500/20">
+                  <Building2 className="w-4 h-4" />
+                </div>
+              </div>
+              <div className="text-xl sm:text-2xl font-black font-mono text-slate-900 dark:text-white mt-1">{totalCompaniesCount}</div>
+              <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">Global enterprise tenants</div>
+            </div>
+
+            <div className="p-3.5 sm:p-4 rounded-xl bg-white dark:bg-[#131924] border border-slate-200 dark:border-slate-800/80 shadow-card">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] uppercase font-mono font-bold text-slate-500 dark:text-slate-400">Active Organizations</span>
+                <div className="p-1.5 rounded-lg bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+                  <Power className="w-4 h-4" />
+                </div>
+              </div>
+              <div className="text-xl sm:text-2xl font-black font-mono text-emerald-600 dark:text-emerald-400 mt-1">{activeCount}</div>
+              <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">{totalCompaniesCount - activeCount} inactive accounts</div>
+            </div>
+
+            <div className="p-3.5 sm:p-4 rounded-xl bg-white dark:bg-[#131924] border border-slate-200 dark:border-slate-800/80 shadow-card">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] uppercase font-mono font-bold text-slate-500 dark:text-slate-400">Deactivated Organizations</span>
+                <div className="p-1.5 rounded-lg bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/20">
+                  <PowerOff className="w-4 h-4" />
+                </div>
+              </div>
+              <div className="text-xl sm:text-2xl font-black font-mono text-rose-600 dark:text-rose-400 mt-1">{deactivatedCount}</div>
+              <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">Access suspended & blocked</div>
+            </div>
+
+            <div className="p-3.5 sm:p-4 rounded-xl bg-white dark:bg-[#131924] border border-slate-200 dark:border-slate-800/80 shadow-card">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] uppercase font-mono font-bold text-slate-500 dark:text-slate-400">Platform SKUs</span>
+                <div className="p-1.5 rounded-lg bg-sky-500/10 text-sky-600 dark:text-sky-400 border border-sky-500/20">
+                  <Package className="w-4 h-4" />
+                </div>
+              </div>
+              <div className="text-xl sm:text-2xl font-black font-mono text-slate-900 dark:text-white mt-1">{totalProductsAcross}</div>
+              <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">Cross-tenant inventory items</div>
             </div>
           </div>
-          <div className="text-2xl font-black text-slate-900 dark:text-white mt-2">{totalCompaniesCount}</div>
-          <div className="text-xs text-slate-500 mt-1">Global enterprise tenants</div>
-        </div>
 
-        <div className="p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Active Organizations</span>
-            <div className="p-2 rounded-xl bg-emerald-500/10 text-emerald-500">
-              <Power className="w-5 h-5" />
+          {/* Action Filters Bar — Responsive Alignment */}
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 sm:gap-3 p-2.5 sm:p-3 rounded-xl bg-white dark:bg-[#131924] border border-slate-200 dark:border-slate-800/80 shadow-card relative z-20">
+            <form onSubmit={handleSearchSubmit} className="relative flex-1 min-w-0">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
+              <input
+                type="text"
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                placeholder="Search company, unique code, or location..."
+                className="w-full pl-9 pr-3 py-1.5 text-xs rounded-lg bg-[#F4F5F8] dark:bg-[#0C1017] border border-slate-200 dark:border-slate-800 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-teal-600"
+              />
+            </form>
+
+            <div className="flex items-center gap-2 sm:gap-3 flex-wrap sm:flex-nowrap">
+              <div className="flex-1 sm:w-48 sm:flex-initial min-w-[130px]">
+                <SimpleSelectDropdown
+                  options={industryFilterOptions}
+                  value={selectedIndustry}
+                  onChange={setSelectedIndustry}
+                  placeholder="All Industries"
+                />
+              </div>
+
+              <div className="flex-1 sm:w-44 sm:flex-initial min-w-[120px]">
+                <SimpleSelectDropdown
+                  options={statusFilterOptions}
+                  value={statusFilter}
+                  onChange={(val) => setStatusFilter(val as any)}
+                  placeholder="All Status"
+                />
+              </div>
+
+              <button
+                type="button"
+                onClick={handleRefreshCompanies}
+                className="p-2 rounded-lg border border-slate-200 dark:border-slate-800 bg-[#F4F5F8] dark:bg-[#0C1017] text-slate-600 dark:text-slate-300 hover:text-teal-400 hover:border-teal-500/40 transition-colors shrink-0"
+                title="Refresh Directory"
+                disabled={isRefreshingCompanies}
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isRefreshingCompanies || isLoading ? 'animate-spin text-teal-500 dark:text-teal-400' : ''}`} />
+              </button>
             </div>
           </div>
-          <div className="text-2xl font-black text-emerald-500 mt-2">{activeCount}</div>
-          <div className="text-xs text-slate-500 mt-1">{totalCompaniesCount - activeCount} deactivated accounts</div>
-        </div>
 
-        <div className="p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Industries Served</span>
-            <div className="p-2 rounded-xl bg-purple-500/10 text-purple-500">
-              <Layers className="w-5 h-5" />
-            </div>
-          </div>
-          <div className="text-2xl font-black text-slate-900 dark:text-white mt-2">{totalIndustriesCount}</div>
-          <div className="text-xs text-slate-500 mt-1">Custom domain models</div>
-        </div>
-
-        <div className="p-5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Platform SKUs</span>
-            <div className="p-2 rounded-xl bg-sky-500/10 text-sky-500">
-              <Package className="w-5 h-5" />
-            </div>
-          </div>
-          <div className="text-2xl font-black text-slate-900 dark:text-white mt-2">{totalProductsAcross}</div>
-          <div className="text-xs text-slate-500 mt-1">Cross-tenant inventory items</div>
-        </div>
-      </div>
-
-      {/* Action Filters Bar */}
-      <div className="flex flex-col sm:flex-row items-center justify-between gap-4 p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
-        <form onSubmit={handleSearchSubmit} className="relative w-full sm:w-80">
-          <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-          <input
-            type="text"
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            placeholder="Search company, industry, or location..."
-            className="w-full pl-10 pr-4 py-2 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-xs text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:border-indigo-500"
-          />
-        </form>
-
-        <div className="flex items-center gap-3 w-full sm:w-auto">
-          <div className="flex items-center gap-2 text-xs font-semibold text-slate-500">
-            <Sliders className="w-3.5 h-3.5" />
-            <span>Industry:</span>
-          </div>
-          <select
-            value={selectedIndustry}
-            onChange={(e) => setSelectedIndustry(e.target.value)}
-            className="px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 text-xs font-semibold text-slate-700 dark:text-slate-300 focus:outline-none focus:border-indigo-500"
-          >
-            <option value="all">All Industries</option>
-            {INDUSTRIES_LIST.map((ind) => (
-              <option key={ind} value={ind}>{ind}</option>
-            ))}
-          </select>
-
-          <button
-            onClick={loadCompanies}
-            className="p-2 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:text-indigo-500 transition-colors"
-            title="Refresh Directory"
-          >
-            <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
-          </button>
-        </div>
-      </div>
-
-      {/* Companies Directory Table */}
-      <div className="rounded-3xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-hidden shadow-sm">
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs">
-            <thead className="bg-slate-50 dark:bg-slate-950 border-b border-slate-200 dark:border-slate-800 text-slate-400 font-bold uppercase tracking-wider">
-              <tr>
-                <th className="px-6 py-4">Company & Slug</th>
-                <th className="px-6 py-4">Industry Domain</th>
-                <th className="px-6 py-4">Location</th>
-                <th className="px-6 py-4">Admin Account</th>
-                <th className="px-6 py-4">Status</th>
-                <th className="px-6 py-4">Metrics</th>
-                <th className="px-6 py-4 text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
-              {companies.length === 0 ? (
-                <tr>
-                  <td colSpan={7} className="px-6 py-12 text-center text-slate-500">
-                    <Building2 className="w-8 h-8 mx-auto mb-2 text-slate-400 opacity-50" />
-                    <p className="font-semibold">No companies found matching criteria.</p>
-                  </td>
-                </tr>
-              ) : (
-                companies.map((c) => (
-                  <tr key={c.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/30 transition-colors">
-                    {/* Company Name */}
-                    <td className="px-6 py-4">
-                      <div className="flex items-center gap-3">
-                        <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-indigo-500/10 text-indigo-500 font-bold text-sm border border-indigo-500/20">
-                          {c.name.charAt(0)}
-                        </div>
-                        <div>
-                          <div className="font-bold text-slate-900 dark:text-white text-sm">{c.name}</div>
-                          <div className="text-[11px] text-slate-400 font-mono">/{c.slug}</div>
-                        </div>
-                      </div>
-                    </td>
-
-                    {/* Industry */}
-                    <td className="px-6 py-4">
-                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-purple-500/10 text-purple-400 border border-purple-500/20 font-semibold text-[11px]">
-                        <Layers className="w-3 h-3" />
-                        <span>{c.industry}</span>
-                      </span>
-                    </td>
-
-                    {/* Location */}
-                    <td className="px-6 py-4">
-                      <div className="flex items-center gap-1 text-slate-600 dark:text-slate-300">
-                        <MapPin className="w-3.5 h-3.5 text-slate-400" />
-                        <span>{c.location || 'HQ'}</span>
-                      </div>
-                    </td>
-
-                    {/* Admin */}
-                    <td className="px-6 py-4">
-                      <div className="font-semibold text-slate-800 dark:text-slate-200">{c.admin_name || 'Admin'}</div>
-                      <div className="text-[11px] text-slate-400 truncate">{c.admin_email || '—'}</div>
-                    </td>
-
-                    {/* Status */}
-                    <td className="px-6 py-4">
-                      <button
-                        onClick={() => handleToggleStatus(c)}
-                        className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold transition-all ${
-                          c.is_active
-                            ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 hover:bg-emerald-500/20'
-                            : 'bg-rose-500/10 text-rose-400 border border-rose-500/20 hover:bg-rose-500/20'
-                        }`}
-                        title="Click to toggle status"
-                      >
-                        <span className={`w-1.5 h-1.5 rounded-full ${c.is_active ? 'bg-emerald-400 animate-pulse' : 'bg-rose-400'}`} />
-                        <span>{c.is_active ? 'Active' : 'Deactivated'}</span>
-                      </button>
-                    </td>
-
-                    {/* Metrics */}
-                    <td className="px-6 py-4">
-                      <div className="flex items-center gap-3 text-slate-500 text-[11px]">
-                        <span title="Products in company">
-                          <strong>{c.product_count}</strong> SKUs
-                        </span>
-                        <span>&bull;</span>
-                        <span title="Users in company">
-                          <strong>{c.user_count}</strong> Users
-                        </span>
-                      </div>
-                    </td>
-
-                    {/* Actions */}
-                    <td className="px-6 py-4 text-right">
-                      <div className="flex items-center justify-end gap-2">
-                        <button
-                          onClick={() => handleOpenAnalytics(c)}
-                          className="p-1.5 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:text-indigo-500 transition-colors"
-                          title="View Live Analytics"
-                        >
-                          <BarChart3 className="w-4 h-4" />
-                        </button>
-                        <button
-                          onClick={() => handleOpenEdit(c)}
-                          className="p-1.5 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:text-indigo-500 transition-colors"
-                          title="Edit Company Details"
-                        >
-                          <Edit className="w-4 h-4" />
-                        </button>
-                      </div>
-                    </td>
+          {/* Companies Directory Table */}
+          <div className="rounded-xl border border-slate-200 dark:border-slate-800/80 bg-white dark:bg-[#131924] overflow-hidden shadow-card">
+            <div className="w-full overflow-hidden">
+              <table className="w-full text-left text-xs table-fixed" onMouseLeave={() => setHoveredCompany(null)}>
+                <thead className="bg-[#F6F8FA] dark:bg-[#0C1017] border-b border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 font-semibold text-[10px] uppercase tracking-wider">
+                  <tr>
+                    <th className="w-[26%] px-3 sm:px-4 py-3 text-left">Company</th>
+                    <th className="w-[14%] px-3 sm:px-4 py-3 text-left">Unique Code</th>
+                    <th className="w-[18%] px-3 sm:px-4 py-3 text-left">Industry Domain</th>
+                    <th className="w-[13%] px-3 sm:px-4 py-3 text-left">Status</th>
+                    <th className="w-[15%] px-3 sm:px-4 py-3 text-left">Metrics</th>
+                    <th className="w-[14%] px-3 sm:px-4 py-3 text-left">Actions</th>
                   </tr>
-                ))
-              )}
-            </tbody>
-          </table>
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60">
+                  {displayedCompanies.length === 0 ? (
+                    <tr>
+                      <td colSpan={6} className="px-6 py-12 text-center text-slate-500">
+                        <Building2 className="w-8 h-8 mx-auto mb-2 text-slate-400 opacity-50" />
+                        <p className="font-semibold">No companies found matching criteria.</p>
+                      </td>
+                    </tr>
+                  ) : (
+                    displayedCompanies.map((c) => {
+                      return (
+                        <tr
+                          key={c.id}
+                          onClick={() => handleOpenDetail(c)}
+                          className="hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors cursor-pointer group/row"
+                        >
+                          {/* Company Name with hover popover trigger */}
+                          <td className="px-3 sm:px-4 py-2.5 align-middle text-left">
+                            <div
+                              onMouseEnter={(e) => {
+                                const rect = e.currentTarget.getBoundingClientRect();
+                                setHoveredCompany({ company: c, rect });
+                              }}
+                              onMouseLeave={() => setHoveredCompany(null)}
+                              className="flex items-center gap-2.5 min-w-0"
+                            >
+                              <div className="flex h-7 w-7 sm:h-8 sm:w-8 items-center justify-center rounded-lg bg-teal-500/10 text-teal-700 dark:text-teal-400 font-bold text-xs border border-teal-500/20 shrink-0">
+                                {c.name.charAt(0).toUpperCase()}
+                              </div>
+                              <span className="font-bold text-slate-900 dark:text-white text-xs sm:text-sm truncate group-hover/row:text-teal-400 transition-colors">
+                                {c.name}
+                              </span>
+                            </div>
+                          </td>
+
+                          {/* Unique Code */}
+                          <td className="px-3 sm:px-4 py-2.5 align-middle text-left whitespace-nowrap">
+                            <span className="inline-flex items-center gap-1 font-mono font-bold text-[11px] px-2 py-0.5 rounded-md bg-teal-500/10 text-teal-700 dark:text-teal-400 border border-teal-500/20">
+                              <Key className="w-3 h-3 text-teal-600 dark:text-teal-400 shrink-0" />
+                              <span>{c.unique_code || c.company_code || 'N/A'}</span>
+                            </span>
+                          </td>
+
+                          {/* Industry Domain */}
+                          <td className="px-3 sm:px-4 py-2.5 align-middle text-left whitespace-nowrap">
+                            <span
+                              className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md bg-slate-100 dark:bg-[#0C1017] text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-800 font-semibold text-[11px] truncate max-w-full"
+                              title={c.industry}
+                            >
+                              <Layers className="w-3 h-3 shrink-0 text-teal-500 dark:text-teal-400" />
+                              <span className="truncate">{c.industry}</span>
+                            </span>
+                          </td>
+
+                          {/* Status */}
+                          <td className="px-3 sm:px-4 py-2.5 align-middle text-left whitespace-nowrap">
+                            <div className="flex items-center justify-start">
+                              <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md text-[10px] font-mono font-bold border ${
+                                c.is_active && !c.is_archived
+                                  ? 'bg-emerald-100 text-emerald-950 border-emerald-300 dark:bg-emerald-500/20 dark:text-emerald-300 dark:border-emerald-500/40'
+                                  : 'bg-rose-100 text-rose-950 border-rose-300 dark:bg-rose-500/20 dark:text-rose-300 dark:border-rose-500/40'
+                              }`}>
+                                <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${c.is_active && !c.is_archived ? 'bg-emerald-600 dark:bg-emerald-400' : 'bg-rose-600 dark:bg-rose-400'}`} />
+                                <span>{c.is_active && !c.is_archived ? 'ACTIVE' : 'DEACTIVATED'}</span>
+                              </span>
+                            </div>
+                          </td>
+
+                          {/* Metrics */}
+                          <td className="px-3 sm:px-4 py-2.5 align-middle text-left whitespace-nowrap">
+                            <div className="flex items-center justify-start gap-1.5 text-slate-500 text-[11px] whitespace-nowrap font-mono">
+                              <span title="Products in company">
+                                <strong className="text-slate-700 dark:text-slate-300 font-semibold">{c.product_count}</strong> SKUs
+                              </span>
+                              <span className="text-slate-400">&bull;</span>
+                              <span title="Users in company">
+                                <strong className="text-slate-700 dark:text-slate-300 font-semibold">{c.user_count}</strong> Users
+                              </span>
+                            </div>
+                          </td>
+
+                          {/* Actions — single line without wrapping, cleanly left-aligned with header */}
+                          <td className="px-3 sm:px-4 py-2.5 align-middle text-left whitespace-nowrap">
+                            <div className="flex items-center justify-start gap-1.5 flex-nowrap" onClick={(e) => e.stopPropagation()}>
+                              {/* Deep-link to Role Management */}
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (onNavigate) {
+                                    onNavigate('roles', { org: c.id });
+                                  } else {
+                                    window.location.href = `/role-management?org=${c.id}`;
+                                  }
+                                }}
+                                className="p-1.5 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:text-teal-400 hover:bg-teal-500/10 transition-colors border border-slate-200 dark:border-slate-700 shrink-0"
+                                title="Manage Organization Roles & Permissions"
+                              >
+                                <Users className="w-3.5 h-3.5" />
+                              </button>
+
+                              {/* Deep-link to Billing */}
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (onNavigate) {
+                                    onNavigate('billing', { org: c.id });
+                                  } else {
+                                    window.location.href = `/billing?org=${c.id}`;
+                                  }
+                                }}
+                                className="p-1.5 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:text-teal-400 hover:bg-teal-500/10 transition-colors border border-slate-200 dark:border-slate-700 shrink-0"
+                                title="Manage Organization Billing & Maintenance Fees"
+                              >
+                                <IndianRupee className="w-3.5 h-3.5" />
+                              </button>
+
+                              {/* Deactivate/Activate Toggle */}
+                              <button
+                                type="button"
+                                onClick={() => handleOpenDeactivateConfirm(c)}
+                                className={`p-1.5 rounded-lg transition-colors border shrink-0 ${
+                                  !c.is_active || c.is_archived
+                                    ? 'bg-rose-500/10 text-rose-400 hover:bg-emerald-500/15 hover:text-emerald-400 border-rose-500/20'
+                                    : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 border-slate-200 dark:border-slate-700'
+                                }`}
+                                title={!c.is_active || c.is_archived ? 'Activate Organization' : 'Deactivate Organization'}
+                              >
+                                {!c.is_active || c.is_archived ? (
+                                  <Power className="w-3.5 h-3.5" />
+                                ) : (
+                                  <PowerOff className="w-3.5 h-3.5" />
+                                )}
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Floating Hover Popover for Organization Details */}
+            {hoveredCompany && (
+              <div
+                style={{
+                  position: 'fixed',
+                  left: Math.max(16, Math.min(hoveredCompany.rect.left, window.innerWidth - 340)),
+                  ...(hoveredCompany.rect.top < 260
+                    ? { top: hoveredCompany.rect.bottom + 8 }
+                    : { bottom: window.innerHeight - hoveredCompany.rect.top + 8 }),
+                }}
+                className="z-[100] w-80 rounded-xl bg-[#111723] text-white p-3.5 text-xs shadow-2xl border border-slate-700/80 ring-1 ring-white/10 pointer-events-none transition-all flex flex-col gap-2.5 animate-in fade-in zoom-in-95 duration-150 select-none"
+              >
+                {/* Organization Identity Header - Company Name Only */}
+                <div className="flex items-center gap-2.5 pb-2 border-b border-slate-800/80">
+                  <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-teal-500/10 text-teal-400 font-bold text-xs border border-teal-500/20 shrink-0">
+                    {hoveredCompany.company.name.charAt(0).toUpperCase()}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="font-bold text-white text-xs leading-snug break-words">
+                      {hoveredCompany.company.name}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Metadata Badges */}
+                <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+                  <span className="inline-flex items-center px-2 py-0.5 rounded-md bg-[#0C1017] text-slate-300 border border-slate-800 text-[10px]">
+                    {hoveredCompany.company.industry}
+                  </span>
+                  {hoveredCompany.company.location && (
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-[#0C1017] text-slate-300 border border-slate-800 text-[10px]">
+                      <MapPin className="w-3 h-3 text-slate-400" />
+                      {hoveredCompany.company.location}
+                    </span>
+                  )}
+                  <span
+                    className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-medium ${
+                      hoveredCompany.company.is_active && !hoveredCompany.company.is_archived
+                        ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                        : 'bg-rose-500/10 text-rose-400 border border-rose-500/20'
+                    }`}
+                  >
+                    <span className="w-1.5 h-1.5 rounded-full bg-current" />
+                    <span>
+                      {hoveredCompany.company.is_active && !hoveredCompany.company.is_archived
+                        ? 'Active'
+                        : 'Deactivated'}
+                    </span>
+                  </span>
+                </div>
+
+                {/* Footer Hint */}
+                <div className="text-[10px] text-teal-400 font-medium flex items-center justify-between pt-1 border-t border-slate-800/60 font-mono">
+                  <span>Click row to view complete details</span>
+                  <span>&rarr;</span>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
-      </div>
 
       {/* PROVISION NEW COMPANY MODAL */}
       {isProvisionModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-slate-950/80 backdrop-blur-md animate-in fade-in duration-200">
-          <div className="w-full max-w-2xl bg-slate-900 border border-slate-800 rounded-3xl shadow-2xl relative max-h-[90vh] flex flex-col overflow-hidden">
+          <div className="w-full max-w-2xl bg-white dark:bg-[#131924] border border-slate-200 dark:border-slate-800 rounded-3xl shadow-2xl relative max-h-[90vh] flex flex-col overflow-hidden">
             {/* Modal Header - Always visible at top */}
-            <div className="flex items-center justify-between border-b border-slate-800 px-6 sm:px-8 py-5 shrink-0 bg-slate-900 z-10">
+            <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800/80 px-6 sm:px-8 py-5 shrink-0 bg-slate-50 dark:bg-[#0C1017] z-10">
               <div>
                 <div className="flex items-center gap-2">
-                  <Building2 className="w-5 h-5 text-indigo-400" />
-                  <h3 className="text-xl font-bold text-white">Provision New Company & Admin</h3>
+                  <Building2 className="w-5 h-5 text-teal-600 dark:text-teal-400" />
+                  <h3 className="text-xl font-bold text-slate-900 dark:text-white">Provision New Company & Admin</h3>
                 </div>
-                <p className="text-xs text-slate-400 mt-1">
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
                   Creates a clean-slate tenant workspace tailored to the chosen industry and sends credentials via email.
                 </p>
               </div>
               <button
                 onClick={() => setIsProvisionModalOpen(false)}
-                className="p-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition-colors"
+                className="p-1.5 rounded-xl bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-colors"
               >
                 &times;
               </button>
@@ -560,100 +888,163 @@ export const SuperAdminConsole: React.FC = () => {
               <div className="p-6 sm:p-8 overflow-y-auto flex-1 space-y-6">
                 {/* Section 1: Company Profile */}
                 <div>
-                  <div className="text-xs font-bold uppercase tracking-wider text-indigo-400 mb-3 flex items-center gap-1.5">
+                  <div className="text-xs font-bold uppercase tracking-wider text-teal-600 dark:text-teal-400 mb-3 flex items-center gap-1.5 font-mono">
                     <span>1. Company Profile & Industry</span>
                   </div>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
-                      <label className="block text-xs font-semibold text-slate-300 mb-1">Company Name *</label>
+                      <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">Company Name *</label>
                       <input
                         type="text"
                         required
                         placeholder="e.g. Apex BioPharma"
                         value={provCompanyName}
                         onChange={(e) => setProvCompanyName(e.target.value)}
-                        className="w-full px-3.5 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white placeholder:text-slate-600 focus:outline-none focus:border-indigo-500"
+                        className="w-full px-3.5 py-2 rounded-xl bg-[#F4F5F8] dark:bg-[#0C1017] border border-slate-200 dark:border-slate-800 text-xs text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500"
                       />
                     </div>
 
                     <div>
-                      <label className="block text-xs font-semibold text-slate-300 mb-1">Industry Domain *</label>
-                      <select
-                        value={provIndustry}
-                        onChange={(e) => setProvIndustry(e.target.value)}
-                        className="w-full px-3.5 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs font-semibold text-white focus:outline-none focus:border-indigo-500"
-                      >
-                        {INDUSTRIES_LIST.map((ind) => (
-                          <option key={ind} value={ind}>{ind}</option>
-                        ))}
-                      </select>
+                      <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                        Unique Company Code (MinIO / DB)
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="Auto-generated if empty (e.g. APEXBIO)"
+                        value={provCompanyCode}
+                        onChange={(e) => setProvCompanyCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ''))}
+                        className="w-full px-3.5 py-2 rounded-xl bg-[#F4F5F8] dark:bg-[#0C1017] border border-slate-200 dark:border-slate-800 text-xs font-mono text-slate-900 dark:text-white uppercase placeholder:text-slate-400 focus:outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500"
+                        maxLength={20}
+                      />
                     </div>
 
                     <div>
-                      <label className="block text-xs font-semibold text-slate-300 mb-1">HQ / Facility Location</label>
+                      <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">Industry Domain *</label>
+                      <SimpleSelectDropdown
+                        options={INDUSTRIES_LIST.map((ind) => ({ value: ind, label: ind }))}
+                        value={provIndustry}
+                        onChange={setProvIndustry}
+                        placeholder="Select industry domain..."
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">HQ / Facility Location</label>
                       <input
                         type="text"
                         placeholder="e.g. Chicago, IL, USA"
                         value={provLocation}
                         onChange={(e) => setProvLocation(e.target.value)}
-                        className="w-full px-3.5 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white placeholder:text-slate-600 focus:outline-none focus:border-indigo-500"
+                        className="w-full px-3.5 py-2 rounded-xl bg-[#F4F5F8] dark:bg-[#0C1017] border border-slate-200 dark:border-slate-800 text-xs text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500"
                       />
                     </div>
 
                     <div>
-                      <label className="block text-xs font-semibold text-slate-300 mb-1">Base Currency</label>
-                      <select
+                      <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">Base Currency</label>
+                      <SimpleSelectDropdown
+                        options={[
+                          { value: 'INR', label: 'INR (₹) - Indian Rupee' },
+                          { value: 'USD', label: 'USD ($)' },
+                          { value: 'EUR', label: 'EUR (€)' },
+                          { value: 'GBP', label: 'GBP (£)' },
+                          { value: 'AED', label: 'AED (د.إ)' },
+                          { value: 'SGD', label: 'SGD (S$)' },
+                          { value: 'CAD', label: 'CAD (C$)' },
+                          { value: 'AUD', label: 'AUD (A$)' },
+                        ]}
                         value={provCurrency}
-                        onChange={(e) => setProvCurrency(e.target.value)}
-                        className="w-full px-3.5 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs font-semibold text-white focus:outline-none focus:border-indigo-500"
-                      >
-                        <option value="USD">USD ($)</option>
-                        <option value="EUR">EUR (€)</option>
-                        <option value="GBP">GBP (£)</option>
-                        <option value="INR">INR (₹)</option>
-                        <option value="CAD">CAD ($)</option>
-                      </select>
+                        onChange={setProvCurrency}
+                      />
                     </div>
                   </div>
                 </div>
 
-                {/* Section 2: Admin Account */}
+                {/* Section 2: Commercial Agreement & Billing Rates (Required) */}
                 <div>
-                  <div className="text-xs font-bold uppercase tracking-wider text-indigo-400 mb-3 flex items-center gap-1.5">
-                    <span>2. Admin Account Credentials</span>
+                  <div className="text-xs font-bold uppercase tracking-wider text-teal-600 dark:text-teal-400 mb-3 flex items-center gap-1.5 font-mono">
+                    <IndianRupee className="w-3.5 h-3.5 text-teal-500" />
+                    <span>2. Commercial Agreement & Billing Rates (Required)</span>
                   </div>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
-                      <label className="block text-xs font-semibold text-slate-300 mb-1">Admin Full Name *</label>
+                      <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                        One-Time Setup Fee (₹) *
+                      </label>
+                      <div className="relative">
+                        <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400">₹</span>
+                        <input
+                          type="number"
+                          required
+                          min="0"
+                          step="100"
+                          placeholder="e.g. 25000"
+                          value={provSetupFee}
+                          onChange={(e) => setProvSetupFee(e.target.value)}
+                          className="w-full pl-8 pr-3.5 py-2 rounded-xl bg-[#F4F5F8] dark:bg-[#0C1017] border border-slate-200 dark:border-slate-800 text-xs font-mono font-bold text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500"
+                        />
+                      </div>
+                      <p className="text-[10px] text-slate-500 mt-1">One-time onboarding fee. Initial status: Pending.</p>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                        Initial Monthly Maintenance Rate (₹) *
+                      </label>
+                      <div className="relative">
+                        <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400">₹</span>
+                        <input
+                          type="number"
+                          required
+                          min="0"
+                          step="100"
+                          placeholder="e.g. 4500 (enter 0 for waived/free)"
+                          value={provMonthlyRate}
+                          onChange={(e) => setProvMonthlyRate(e.target.value)}
+                          className="w-full pl-8 pr-3.5 py-2 rounded-xl bg-[#F4F5F8] dark:bg-[#0C1017] border border-slate-200 dark:border-slate-800 text-xs font-mono font-bold text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500"
+                        />
+                      </div>
+                      <p className="text-[10px] text-slate-500 mt-1">Recurring rate for monthly maintenance. Can be ₹0.</p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Section 3: Admin Account */}
+                <div>
+                  <div className="text-xs font-bold uppercase tracking-wider text-teal-600 dark:text-teal-400 mb-3 flex items-center gap-1.5 font-mono">
+                    <span>3. Admin Account Credentials</span>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">Admin Full Name *</label>
                       <input
                         type="text"
                         required
                         placeholder="e.g. Sarah Connor"
                         value={provAdminName}
                         onChange={(e) => setProvAdminName(e.target.value)}
-                        className="w-full px-3.5 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white placeholder:text-slate-600 focus:outline-none focus:border-indigo-500"
+                        className="w-full px-3.5 py-2 rounded-xl bg-[#F4F5F8] dark:bg-[#0C1017] border border-slate-200 dark:border-slate-800 text-xs text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500"
                       />
                     </div>
 
                     <div>
-                      <label className="block text-xs font-semibold text-slate-300 mb-1">Admin Work Email *</label>
+                      <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">Admin Work Email *</label>
                       <input
                         type="email"
                         required
                         placeholder="admin@company.com"
                         value={provAdminEmail}
                         onChange={(e) => setProvAdminEmail(e.target.value)}
-                        className="w-full px-3.5 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white placeholder:text-slate-600 focus:outline-none focus:border-indigo-500"
+                        className="w-full px-3.5 py-2 rounded-xl bg-[#F4F5F8] dark:bg-[#0C1017] border border-slate-200 dark:border-slate-800 text-xs text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500"
                       />
                     </div>
 
                     <div className="sm:col-span-2">
                       <div className="flex items-center justify-between mb-1">
-                        <label className="block text-xs font-semibold text-slate-300">Initial Password *</label>
+                        <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300">Initial Password *</label>
                         <button
                           type="button"
                           onClick={generateRandomPassword}
-                          className="text-[11px] font-bold text-indigo-400 hover:text-indigo-300 flex items-center gap-1"
+                          className="text-[11px] font-bold text-teal-600 dark:text-teal-400 hover:text-teal-500 flex items-center gap-1"
                         >
                           <Sparkles className="w-3 h-3" />
                           <span>Generate Secure Password</span>
@@ -666,12 +1057,12 @@ export const SuperAdminConsole: React.FC = () => {
                           value={provAdminPassword}
                           onChange={(e) => setProvAdminPassword(e.target.value)}
                           placeholder="••••••••••••"
-                          className="w-full pl-3.5 pr-10 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white font-mono placeholder:text-slate-600 focus:outline-none focus:border-indigo-500"
+                          className="w-full pl-3.5 pr-10 py-2 rounded-xl bg-[#F4F5F8] dark:bg-[#0C1017] border border-slate-200 dark:border-slate-800 text-xs text-slate-900 dark:text-white font-mono placeholder:text-slate-400 focus:outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500"
                         />
                         <button
                           type="button"
                           onClick={() => setProvShowPassword(!provShowPassword)}
-                          className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300"
+                          className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
                         >
                           {provShowPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                         </button>
@@ -680,10 +1071,10 @@ export const SuperAdminConsole: React.FC = () => {
                   </div>
                 </div>
 
-                {/* Section 3: Enabled Modules Checklist */}
+                {/* Section 4: Enabled Modules Checklist */}
                 <div>
-                  <div className="text-xs font-bold uppercase tracking-wider text-indigo-400 mb-3 flex items-center gap-1.5">
-                    <span>3. Enabled Modules for this Company</span>
+                  <div className="text-xs font-bold uppercase tracking-wider text-teal-600 dark:text-teal-400 mb-3 flex items-center gap-1.5 font-mono">
+                    <span>4. Enabled Modules for this Company</span>
                   </div>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                     {AVAILABLE_MODULES.map((mod) => {
@@ -694,18 +1085,18 @@ export const SuperAdminConsole: React.FC = () => {
                           onClick={() => toggleModuleSelection(mod.id)}
                           className={`p-3 rounded-xl border cursor-pointer transition-all flex items-start gap-2.5 ${
                             isChecked
-                              ? 'bg-indigo-950/40 border-indigo-500/50 text-white'
-                              : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700'
+                              ? 'bg-teal-500/10 border-teal-500/40 text-slate-900 dark:text-white'
+                              : 'bg-[#F4F5F8] dark:bg-[#0C1017] border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400 hover:border-slate-300 dark:hover:border-slate-700'
                           }`}
                         >
                           <input
                             type="checkbox"
                             checked={isChecked}
                             onChange={() => {}}
-                            className="mt-0.5 rounded border-slate-700 text-indigo-600 focus:ring-0"
+                            className="mt-0.5 rounded border-slate-300 dark:border-slate-700 text-teal-600 focus:ring-0"
                           />
                           <div>
-                            <div className="text-xs font-bold text-slate-200">{mod.label}</div>
+                            <div className="text-xs font-bold text-slate-800 dark:text-slate-200">{mod.label}</div>
                             <div className="text-[10px] text-slate-500 leading-tight mt-0.5">{mod.desc}</div>
                           </div>
                         </div>
@@ -714,15 +1105,15 @@ export const SuperAdminConsole: React.FC = () => {
                   </div>
                 </div>
 
-                {/* Section 4: Email Dispatch Toggle */}
-                <div className="p-4 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-between">
+                {/* Section 5: Email Dispatch Toggle */}
+                <div className="p-4 rounded-2xl bg-teal-500/10 border border-teal-500/20 flex items-center justify-between">
                   <div className="flex items-center gap-3">
-                    <div className="p-2 rounded-xl bg-indigo-500 text-white">
+                    <div className="p-2 rounded-xl bg-teal-600 text-white">
                       <Send className="w-4 h-4" />
                     </div>
                     <div>
-                      <div className="text-xs font-bold text-white">Send Credentials via Email</div>
-                      <div className="text-[11px] text-indigo-300">
+                      <div className="text-xs font-bold text-slate-900 dark:text-white">Send Credentials via Email</div>
+                      <div className="text-[11px] text-slate-600 dark:text-teal-300/90">
                         Dispatches welcome email with login details directly to the newly provisioned Admin.
                       </div>
                     </div>
@@ -731,24 +1122,24 @@ export const SuperAdminConsole: React.FC = () => {
                     type="checkbox"
                     checked={provSendEmail}
                     onChange={(e) => setProvSendEmail(e.target.checked)}
-                    className="h-5 w-5 rounded border-slate-700 text-indigo-600 focus:ring-0 cursor-pointer"
+                    className="h-5 w-5 rounded border-slate-300 dark:border-slate-700 text-teal-600 focus:ring-0 cursor-pointer"
                   />
                 </div>
               </div>
 
               {/* Modal Footer - Always cleanly visible at bottom */}
-              <div className="flex items-center justify-end gap-3 px-6 sm:px-8 py-4 border-t border-slate-800 shrink-0 bg-slate-900/95 backdrop-blur-md">
+              <div className="flex items-center justify-end gap-3 px-6 sm:px-8 py-4 border-t border-slate-200 dark:border-slate-800/80 shrink-0 bg-slate-50 dark:bg-[#0C1017] backdrop-blur-md">
                 <button
                   type="button"
                   onClick={() => setIsProvisionModalOpen(false)}
-                  className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-bold text-slate-300 transition-colors"
+                  className="px-4 py-2.5 rounded-xl bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 text-xs font-bold text-slate-700 dark:text-slate-300 transition-colors"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={isSubmittingProvision}
-                  className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white text-xs font-bold shadow-lg shadow-indigo-500/20 flex items-center gap-2 disabled:opacity-50 transition-all"
+                  className="px-5 py-2.5 rounded-xl bg-teal-700 hover:bg-teal-800 text-white text-xs font-bold shadow-subtle flex items-center gap-2 disabled:opacity-50 transition-all"
                 >
                   {isSubmittingProvision ? (
                     <span>Provisioning Organization...</span>
@@ -765,21 +1156,271 @@ export const SuperAdminConsole: React.FC = () => {
         </div>
       )}
 
+      {/* ORGANIZATION COMPLETE DETAIL VIEW MODAL */}
+      {isDetailModalOpen && selectedCompanyForDetail && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-slate-950/80 backdrop-blur-md animate-in fade-in duration-200">
+          <div className="w-full max-w-2xl bg-white dark:bg-[#131924] border border-slate-200 dark:border-slate-800 rounded-3xl shadow-2xl relative max-h-[90vh] flex flex-col overflow-hidden">
+            {/* Modal Header */}
+            <div className="flex items-start justify-between border-b border-slate-200 dark:border-slate-800/80 px-6 sm:px-8 py-5 shrink-0 bg-slate-50 dark:bg-[#0C1017]">
+              <div className="flex items-center gap-4">
+                <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-teal-500/10 text-teal-600 dark:text-teal-400 font-bold text-lg border border-teal-500/20 shadow-inner shrink-0">
+                  {selectedCompanyForDetail.name.charAt(0).toUpperCase()}
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-xl font-bold text-slate-900 dark:text-white tracking-tight">
+                      {selectedCompanyForDetail.name}
+                    </h3>
+                    <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[10px] font-mono font-medium ${
+                      selectedCompanyForDetail.is_active && !selectedCompanyForDetail.is_archived
+                        ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-500/20'
+                        : 'bg-rose-500/10 text-rose-700 dark:text-rose-400 border border-rose-500/20'
+                    }`}>
+                      <span className={`w-1.5 h-1.5 rounded-sm ${selectedCompanyForDetail.is_active && !selectedCompanyForDetail.is_archived ? 'bg-emerald-500' : 'bg-rose-500'}`} />
+                      <span>{selectedCompanyForDetail.is_active && !selectedCompanyForDetail.is_archived ? 'ACTIVE' : 'DEACTIVATED'}</span>
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2 mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+                    {selectedCompanyForDetail.created_at && (
+                      <>
+                        <span>&bull;</span>
+                        <span className="flex items-center gap-1 text-[11px] text-slate-500">
+                          <Clock className="w-3 h-3" />
+                          <span>Provisioned {new Date(selectedCompanyForDetail.created_at).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })}</span>
+                        </span>
+                      </>
+                    )}
+                  </div>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsDetailModalOpen(false)}
+                className="p-1.5 rounded-xl bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-colors"
+                title="Close"
+              >
+                <XCircle className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-6 sm:p-8 overflow-y-auto flex-1 space-y-6">
+              {/* Grid 1: Identity & Key Attributes */}
+              <div>
+                <div className="text-[11px] font-bold uppercase tracking-wider text-teal-600 dark:text-teal-400 mb-3 flex items-center gap-1.5 font-mono">
+                  <Building2 className="w-3.5 h-3.5 text-teal-500 dark:text-teal-400" />
+                  <span>Organization Identity & Parameters</span>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {/* Unique Code */}
+                  <div className="p-3.5 rounded-2xl bg-[#F4F5F8] dark:bg-[#0C1017] border border-slate-200 dark:border-slate-800/80 flex items-start gap-3">
+                    <div className="p-2 rounded-xl bg-teal-500/10 text-teal-600 dark:text-teal-400 border border-teal-500/20 shrink-0">
+                      <Key className="w-4 h-4" />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wide">Unique Tenant Code</div>
+                      <div className="text-xs font-mono font-bold text-teal-600 dark:text-teal-300 mt-0.5">
+                        {selectedCompanyForDetail.unique_code || selectedCompanyForDetail.company_code || 'N/A'}
+                      </div>
+                      <div className="text-[10px] text-slate-500 mt-0.5">MinIO object storage root directory</div>
+                    </div>
+                  </div>
+
+                  {/* Industry Domain */}
+                  <div className="p-3.5 rounded-2xl bg-[#F4F5F8] dark:bg-[#0C1017] border border-slate-200 dark:border-slate-800/80 flex items-start gap-3">
+                    <div className="p-2 rounded-xl bg-teal-500/10 text-teal-600 dark:text-teal-400 border border-teal-500/20 shrink-0">
+                      <Layers className="w-4 h-4" />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wide">Industry Domain</div>
+                      <div className="text-xs font-bold text-slate-800 dark:text-slate-200 mt-0.5 truncate">
+                        {selectedCompanyForDetail.industry || 'General Merchandise'}
+                      </div>
+                      <div className="text-[10px] text-slate-500 mt-0.5">Operational sector classification</div>
+                    </div>
+                  </div>
+
+                  {/* Location (HQ) */}
+                  <div className="p-3.5 rounded-2xl bg-[#F4F5F8] dark:bg-[#0C1017] border border-slate-200 dark:border-slate-800/80 flex items-start gap-3">
+                    <div className="p-2 rounded-xl bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20 shrink-0">
+                      <MapPin className="w-4 h-4" />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wide">Primary Location / HQ</div>
+                      <div className="text-xs font-bold text-slate-800 dark:text-slate-200 mt-0.5">
+                        {selectedCompanyForDetail.location || 'Headquarters'}
+                      </div>
+                      <div className="text-[10px] text-slate-500 mt-0.5">Primary registered business jurisdiction</div>
+                    </div>
+                  </div>
+
+                  {/* Operational Currency */}
+                  <div className="p-3.5 rounded-2xl bg-[#F4F5F8] dark:bg-[#0C1017] border border-slate-200 dark:border-slate-800/80 flex items-start gap-3">
+                    <div className="p-2 rounded-xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 shrink-0">
+                      <IndianRupee className="w-4 h-4" />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wide">Base Valuation Currency</div>
+                      <div className="text-xs font-bold text-emerald-600 dark:text-emerald-300 mt-0.5">
+                        {selectedCompanyForDetail.currency || 'INR'}
+                      </div>
+                      <div className="text-[10px] text-slate-500 mt-0.5">Default ledger & costing currency</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Grid 2: Primary Admin Account Credentials */}
+              <div>
+                <div className="text-[11px] font-bold uppercase tracking-wider text-teal-600 dark:text-teal-400 mb-3 flex items-center gap-1.5 font-mono">
+                  <Shield className="w-3.5 h-3.5 text-teal-500 dark:text-teal-400" />
+                  <span>Primary Admin Account</span>
+                </div>
+                <div className="p-4 rounded-2xl bg-[#F4F5F8] dark:bg-[#0C1017] border border-slate-200 dark:border-slate-800/80">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div className="flex items-center gap-3">
+                      <div className="p-2.5 rounded-xl bg-white dark:bg-[#131924] border border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-300">
+                        <Users className="w-4 h-4 text-teal-600 dark:text-teal-400" />
+                      </div>
+                      <div>
+                        <div className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wide">Administrator Name</div>
+                        <div className="text-xs font-bold text-slate-900 dark:text-white mt-0.5">
+                          {selectedCompanyForDetail.admin_name || 'Organization Admin'}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-3">
+                      <div className="p-2.5 rounded-xl bg-white dark:bg-[#131924] border border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-300">
+                        <Mail className="w-4 h-4 text-teal-600 dark:text-teal-400" />
+                      </div>
+                      <div className="min-w-0">
+                        <div className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wide">Work Email Address</div>
+                        <div className="text-xs font-medium text-slate-800 dark:text-slate-200 mt-0.5 truncate font-mono">
+                          {selectedCompanyForDetail.admin_email || 'admin@' + selectedCompanyForDetail.slug + '.com'}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Grid 3: Operational Telemetry Metrics */}
+              <div>
+                <div className="text-[11px] font-bold uppercase tracking-wider text-teal-600 dark:text-teal-400 mb-3 flex items-center gap-1.5 font-mono">
+                  <BarChart3 className="w-3.5 h-3.5 text-teal-500 dark:text-teal-400" />
+                  <span>Operational Telemetry & Capacity</span>
+                </div>
+                <div className="grid grid-cols-3 gap-3">
+                  <div className="p-3.5 rounded-2xl bg-[#F4F5F8] dark:bg-[#0C1017] border border-slate-200 dark:border-slate-800/80 text-center">
+                    <div className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase">Catalog SKUs</div>
+                    <div className="text-xl font-black font-mono text-slate-900 dark:text-white mt-1">
+                      {selectedCompanyForDetail.product_count ?? 0}
+                    </div>
+                    <div className="text-[10px] text-slate-500 mt-0.5">Active inventory items</div>
+                  </div>
+
+                  <div className="p-3.5 rounded-2xl bg-[#F4F5F8] dark:bg-[#0C1017] border border-slate-200 dark:border-slate-800/80 text-center">
+                    <div className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase">Tenant Users</div>
+                    <div className="text-xl font-black font-mono text-teal-600 dark:text-teal-400 mt-1">
+                      {selectedCompanyForDetail.user_count ?? 0}
+                    </div>
+                    <div className="text-[10px] text-slate-500 mt-0.5">Registered accounts</div>
+                  </div>
+
+                  <div className="p-3.5 rounded-2xl bg-[#F4F5F8] dark:bg-[#0C1017] border border-slate-200 dark:border-slate-800/80 text-center">
+                    <div className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase">Account Status</div>
+                    <div className="text-xs font-black mt-2">
+                      <span className={`px-2 py-0.5 rounded-full ${
+                        selectedCompanyForDetail.is_active && !selectedCompanyForDetail.is_archived
+                          ? 'bg-emerald-500/20 text-emerald-600 dark:text-emerald-400'
+                          : 'bg-rose-500/20 text-rose-600 dark:text-rose-400'
+                      }`}>
+                        {selectedCompanyForDetail.is_active && !selectedCompanyForDetail.is_archived ? 'Active' : 'Deactivated'}
+                      </span>
+                    </div>
+                    <div className="text-[10px] text-slate-500 mt-1">RLS policy state</div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Grid 4: Enabled Platform Modules */}
+              <div>
+                <div className="text-[11px] font-bold uppercase tracking-wider text-teal-600 dark:text-teal-400 mb-3 flex items-center gap-1.5 font-mono">
+                  <Sliders className="w-3.5 h-3.5 text-teal-500 dark:text-teal-400" />
+                  <span>Enabled Platform Modules</span>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {AVAILABLE_MODULES.map((mod) => {
+                    const isModActive = (selectedCompanyForDetail.enabled_modules || [
+                      'products', 'locations', 'orders', 'transfers', 'adjustments', 'ledger', 'reports', 'storage'
+                    ]).includes(mod.id);
+                    return (
+                      <div
+                        key={mod.id}
+                        className={`p-2.5 rounded-xl border flex items-center gap-2.5 ${
+                          isModActive
+                            ? 'bg-teal-500/10 border-teal-500/30 text-slate-900 dark:text-slate-200'
+                            : 'bg-[#F4F5F8] dark:bg-[#0C1017] border-slate-200 dark:border-slate-800 text-slate-400 opacity-60'
+                        }`}
+                      >
+                        <div className={`w-2 h-2 rounded-full shrink-0 ${isModActive ? 'bg-emerald-400' : 'bg-slate-400 dark:bg-slate-600'}`} />
+                        <div className="min-w-0">
+                          <div className="text-xs font-semibold text-slate-800 dark:text-slate-200 truncate">{mod.label}</div>
+                          <div className="text-[10px] text-slate-500 truncate">{mod.desc}</div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+
+            {/* Modal Footer */}
+            <div className="flex items-center justify-end gap-2.5 px-6 sm:px-8 py-4 border-t border-slate-200 dark:border-slate-800/80 shrink-0 bg-slate-50 dark:bg-[#0C1017]">
+              <button
+                type="button"
+                onClick={() => {
+                  const comp = selectedCompanyForDetail;
+                  setIsDetailModalOpen(false);
+                  handleOpenAnalytics(comp);
+                }}
+                className="px-3.5 py-2 rounded-xl bg-teal-500/10 hover:bg-teal-500/20 text-teal-600 dark:text-teal-400 border border-teal-500/20 text-xs font-bold flex items-center gap-1.5 transition-colors"
+              >
+                <BarChart3 className="w-3.5 h-3.5" />
+                <span>Live Analytics</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const comp = selectedCompanyForDetail;
+                  setIsDetailModalOpen(false);
+                  handleOpenEdit(comp);
+                }}
+                className="px-3.5 py-2 rounded-xl bg-white dark:bg-[#131924] hover:bg-slate-100 dark:hover:bg-[#1A2232] border border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-200 text-xs font-bold flex items-center gap-1.5 transition-colors"
+              >
+                <Edit className="w-3.5 h-3.5" />
+                <span>Edit Details</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* LIVE ANALYTICS MODAL */}
       {isAnalyticsModalOpen && activeCompanyForAnalytics && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-slate-950/80 backdrop-blur-md animate-in fade-in duration-200">
-          <div className="w-full max-w-lg bg-slate-900 border border-slate-800 rounded-3xl shadow-2xl relative max-h-[90vh] flex flex-col overflow-hidden">
-            <div className="flex items-center justify-between border-b border-slate-800 px-6 sm:px-8 py-5 shrink-0 bg-slate-900">
+          <div className="w-full max-w-lg bg-white dark:bg-[#131924] border border-slate-200 dark:border-slate-800 rounded-3xl shadow-2xl relative max-h-[90vh] flex flex-col overflow-hidden">
+            <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800/80 px-6 sm:px-8 py-5 shrink-0 bg-slate-50 dark:bg-[#0C1017]">
               <div>
-                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-400 border border-purple-500/30 uppercase tracking-wider">
+                <span className="text-[10px] font-mono font-medium px-2 py-0.5 rounded bg-teal-500/10 text-teal-600 dark:text-teal-400 border border-teal-500/20 uppercase tracking-wider">
                   {activeCompanyForAnalytics.industry}
                 </span>
-                <h3 className="text-xl font-bold text-white mt-1">{activeCompanyForAnalytics.name}</h3>
-                <p className="text-xs text-slate-400">Live operational inventory metrics</p>
+                <h3 className="text-xl font-bold text-slate-900 dark:text-white mt-1">{activeCompanyForAnalytics.name}</h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400">Live operational inventory metrics</p>
               </div>
               <button
                 onClick={() => setIsAnalyticsModalOpen(false)}
-                className="p-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition-colors"
+                className="p-1.5 rounded-xl bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-colors"
               >
                 &times;
               </button>
@@ -788,43 +1429,43 @@ export const SuperAdminConsole: React.FC = () => {
             <div className="p-6 sm:p-8 overflow-y-auto flex-1">
               {!analyticsData ? (
                 <div className="py-12 text-center text-slate-400">
-                  <RefreshCw className="w-6 h-6 animate-spin mx-auto mb-2 text-indigo-400" />
+                  <RefreshCw className="w-6 h-6 animate-spin mx-auto mb-2 text-teal-500 dark:text-teal-400" />
                   <p className="text-xs">Fetching live metrics from database...</p>
                 </div>
               ) : (
                 <div className="space-y-4">
                   <div className="grid grid-cols-2 gap-3">
-                    <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800">
+                    <div className="p-4 rounded-2xl bg-[#F4F5F8] dark:bg-[#0C1017] border border-slate-200 dark:border-slate-800">
                       <div className="text-[11px] font-bold text-slate-500 uppercase">Inventory SKUs</div>
-                      <div className="text-2xl font-black text-white mt-1">{analyticsData.total_products}</div>
+                      <div className="text-2xl font-black font-mono text-slate-900 dark:text-white mt-1">{analyticsData.total_products}</div>
                       <div className="text-[10px] text-slate-500">Active catalog items</div>
                     </div>
 
-                    <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800">
+                    <div className="p-4 rounded-2xl bg-[#F4F5F8] dark:bg-[#0C1017] border border-slate-200 dark:border-slate-800">
                       <div className="text-[11px] font-bold text-slate-500 uppercase">Total Valuation</div>
-                      <div className="text-2xl font-black text-emerald-400 mt-1">
-                        ${analyticsData.total_inventory_valuation.toLocaleString()}
+                      <div className="text-2xl font-black font-mono text-emerald-600 dark:text-emerald-400 mt-1">
+                        ₹{analyticsData.total_inventory_valuation.toLocaleString('en-IN')}
                       </div>
                       <div className="text-[10px] text-slate-500">Cost valuation</div>
                     </div>
 
-                    <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800">
+                    <div className="p-4 rounded-2xl bg-[#F4F5F8] dark:bg-[#0C1017] border border-slate-200 dark:border-slate-800">
                       <div className="text-[11px] font-bold text-slate-500 uppercase">Movement Transactions</div>
-                      <div className="text-2xl font-black text-indigo-400 mt-1">{analyticsData.total_movements}</div>
+                      <div className="text-2xl font-black font-mono text-teal-600 dark:text-teal-400 mt-1">{analyticsData.total_movements}</div>
                       <div className="text-[10px] text-slate-500">Immutable ledger events</div>
                     </div>
 
-                    <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800">
+                    <div className="p-4 rounded-2xl bg-[#F4F5F8] dark:bg-[#0C1017] border border-slate-200 dark:border-slate-800">
                       <div className="text-[11px] font-bold text-slate-500 uppercase">Company Users</div>
-                      <div className="text-2xl font-black text-purple-400 mt-1">{analyticsData.total_users}</div>
+                      <div className="text-2xl font-black font-mono text-slate-800 dark:text-slate-200 mt-1">{analyticsData.total_users}</div>
                       <div className="text-[10px] text-slate-500">Active staff & admins</div>
                     </div>
                   </div>
 
-                  <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 flex items-center justify-between text-xs">
-                    <span className="text-slate-400 font-semibold">Account Status:</span>
-                    <span className={`px-2.5 py-1 rounded-full font-bold ${
-                      analyticsData.is_active ? 'bg-emerald-500/20 text-emerald-400' : 'bg-rose-500/20 text-rose-400'
+                  <div className="p-4 rounded-2xl bg-[#F4F5F8] dark:bg-[#0C1017] border border-slate-200 dark:border-slate-800 flex items-center justify-between text-xs">
+                    <span className="text-slate-600 dark:text-slate-400 font-semibold">Account Status:</span>
+                    <span className={`px-2 py-0.5 rounded font-mono text-[11px] font-semibold ${
+                      analyticsData.is_active ? 'bg-emerald-500/20 text-emerald-600 dark:text-emerald-400' : 'bg-rose-500/20 text-rose-600 dark:text-rose-400'
                     }`}>
                       {analyticsData.is_active ? 'Active & Accessible' : 'Deactivated by Super Admin'}
                     </span>
@@ -839,12 +1480,12 @@ export const SuperAdminConsole: React.FC = () => {
       {/* EDIT COMPANY MODAL */}
       {isEditModalOpen && companyToEdit && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-slate-950/80 backdrop-blur-md animate-in fade-in duration-200">
-          <div className="w-full max-w-lg bg-slate-900 border border-slate-800 rounded-3xl shadow-2xl relative max-h-[90vh] flex flex-col overflow-hidden">
-            <div className="flex items-center justify-between border-b border-slate-800 px-6 sm:px-8 py-5 shrink-0 bg-slate-900">
-              <h3 className="text-xl font-bold text-white">Edit Company Metadata</h3>
+          <div className="w-full max-w-lg bg-white dark:bg-[#131924] border border-slate-200 dark:border-slate-800 rounded-3xl shadow-2xl relative max-h-[90vh] flex flex-col overflow-hidden">
+            <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800/80 px-6 sm:px-8 py-5 shrink-0 bg-slate-50 dark:bg-[#0C1017]">
+              <h3 className="text-xl font-bold text-slate-900 dark:text-white">Edit Company Metadata</h3>
               <button
                 onClick={() => setIsEditModalOpen(false)}
-                className="p-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition-colors"
+                className="p-1.5 rounded-xl bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-colors"
               >
                 &times;
               </button>
@@ -853,53 +1494,68 @@ export const SuperAdminConsole: React.FC = () => {
             <form onSubmit={handleSaveEdit} className="flex-1 flex flex-col min-h-0 overflow-hidden">
               <div className="p-6 sm:p-8 overflow-y-auto flex-1 space-y-4">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1">Company Name</label>
+                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">Company Name</label>
                   <input
                     type="text"
                     value={companyToEdit.name}
                     onChange={(e) => setCompanyToEdit({ ...companyToEdit, name: e.target.value })}
-                    className="w-full px-3.5 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white focus:outline-none focus:border-indigo-500"
+                    className="w-full px-3.5 py-2 rounded-xl bg-[#F4F5F8] dark:bg-[#0C1017] border border-slate-200 dark:border-slate-800 text-xs text-slate-900 dark:text-white focus:outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1">Industry</label>
-                  <select
-                    value={companyToEdit.industry}
-                    onChange={(e) => setCompanyToEdit({ ...companyToEdit, industry: e.target.value })}
-                    className="w-full px-3.5 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs font-semibold text-white focus:outline-none focus:border-indigo-500"
-                  >
-                    {INDUSTRIES_LIST.map((ind) => (
-                      <option key={ind} value={ind}>{ind}</option>
-                    ))}
-                  </select>
+                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    Company Unique Code (MinIO Root Folder)
+                  </label>
+                  <input
+                    type="text"
+                    value={companyToEdit.unique_code || companyToEdit.company_code || ''}
+                    onChange={(e) =>
+                      setCompanyToEdit({
+                        ...companyToEdit,
+                        unique_code: e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ''),
+                      })
+                    }
+                    className="w-full px-3.5 py-2 rounded-xl bg-[#F4F5F8] dark:bg-[#0C1017] border border-slate-200 dark:border-slate-800 text-xs font-mono uppercase text-slate-900 dark:text-white focus:outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500"
+                    placeholder="e.g. HAPKONIC"
+                    maxLength={20}
+                  />
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1">Location</label>
+                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">Industry</label>
+                  <SimpleSelectDropdown
+                    options={INDUSTRIES_LIST.map((ind) => ({ value: ind, label: ind }))}
+                    value={companyToEdit.industry}
+                    onChange={(val) => setCompanyToEdit({ ...companyToEdit, industry: val })}
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">Location</label>
                   <input
                     type="text"
                     value={companyToEdit.location || ''}
                     onChange={(e) => setCompanyToEdit({ ...companyToEdit, location: e.target.value })}
-                    className="w-full px-3.5 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white focus:outline-none focus:border-indigo-500"
+                    className="w-full px-3.5 py-2 rounded-xl bg-[#F4F5F8] dark:bg-[#0C1017] border border-slate-200 dark:border-slate-800 text-xs text-slate-900 dark:text-white focus:outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1">Enabled Modules</label>
+                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">Enabled Modules</label>
                   <div className="grid grid-cols-2 gap-2 max-h-48 overflow-y-auto pr-1">
                     {AVAILABLE_MODULES.map((mod) => {
                       const isChecked = (companyToEdit.enabled_modules || []).includes(mod.id);
                       return (
                         <label
                           key={mod.id}
-                          className="flex items-center gap-2 p-2 rounded-lg bg-slate-950 border border-slate-800 text-xs text-slate-300 cursor-pointer hover:border-slate-700"
+                          className="flex items-center gap-2 p-2 rounded-lg bg-[#F4F5F8] dark:bg-[#0C1017] border border-slate-200 dark:border-slate-800 text-xs text-slate-700 dark:text-slate-300 cursor-pointer hover:border-slate-300 dark:hover:border-slate-700"
                         >
                           <input
                             type="checkbox"
                             checked={isChecked}
                             onChange={() => toggleEditModuleSelection(mod.id)}
-                            className="rounded border-slate-700 text-indigo-600 focus:ring-0"
+                            className="rounded border-slate-300 dark:border-slate-700 text-teal-600 focus:ring-0"
                           />
                           <span className="truncate">{mod.label}</span>
                         </label>
@@ -909,17 +1565,17 @@ export const SuperAdminConsole: React.FC = () => {
                 </div>
               </div>
 
-              <div className="flex items-center justify-end gap-2 px-6 sm:px-8 py-4 border-t border-slate-800 shrink-0 bg-slate-900/95">
+              <div className="flex items-center justify-end gap-2 px-6 sm:px-8 py-4 border-t border-slate-200 dark:border-slate-800/80 shrink-0 bg-slate-50 dark:bg-[#0C1017]">
                 <button
                   type="button"
                   onClick={() => setIsEditModalOpen(false)}
-                  className="px-4 py-2 rounded-xl bg-slate-800 text-xs font-bold text-slate-300 hover:bg-slate-700 transition-colors"
+                  className="px-4 py-2 rounded-xl bg-slate-200 dark:bg-slate-800 text-xs font-bold text-slate-700 dark:text-slate-300 hover:bg-slate-300 dark:hover:bg-slate-700 transition-colors"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-xs font-bold text-white shadow-lg shadow-indigo-500/20 transition-all"
+                  className="px-4 py-2 rounded-xl bg-teal-700 hover:bg-teal-800 text-xs font-bold text-white shadow-subtle transition-all"
                 >
                   Save Changes
                 </button>
@@ -932,15 +1588,15 @@ export const SuperAdminConsole: React.FC = () => {
       {/* PLATFORM REPORT MODAL */}
       {isReportModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-slate-950/80 backdrop-blur-md animate-in fade-in duration-200">
-          <div className="w-full max-w-2xl bg-slate-900 border border-slate-800 rounded-3xl shadow-2xl relative max-h-[90vh] flex flex-col overflow-hidden">
-            <div className="flex items-center justify-between border-b border-slate-800 px-6 sm:px-8 py-5 shrink-0 bg-slate-900">
+          <div className="w-full max-w-2xl bg-white dark:bg-[#131924] border border-slate-200 dark:border-slate-800 rounded-3xl shadow-2xl relative max-h-[90vh] flex flex-col overflow-hidden">
+            <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800/80 px-6 sm:px-8 py-5 shrink-0 bg-slate-50 dark:bg-[#0C1017]">
               <div>
-                <h3 className="text-xl font-bold text-white">Global Platform Executive Report</h3>
-                <p className="text-xs text-slate-400">Aggregated cross-company statistics and tenant audit summary.</p>
+                <h3 className="text-xl font-bold text-slate-900 dark:text-white">Global Platform Executive Report</h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400">Aggregated cross-company statistics and tenant audit summary.</p>
               </div>
               <button
                 onClick={() => setIsReportModalOpen(false)}
-                className="p-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition-colors"
+                className="p-1.5 rounded-xl bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-colors"
               >
                 &times;
               </button>
@@ -949,34 +1605,34 @@ export const SuperAdminConsole: React.FC = () => {
             <div className="p-6 sm:p-8 overflow-y-auto flex-1">
               {!platformReport ? (
                 <div className="py-12 text-center text-slate-400">
-                  <RefreshCw className="w-6 h-6 animate-spin mx-auto mb-2 text-indigo-400" />
+                  <RefreshCw className="w-6 h-6 animate-spin mx-auto mb-2 text-teal-500 dark:text-teal-400" />
                   <p className="text-xs">Generating platform summary...</p>
                 </div>
               ) : (
                 <div className="space-y-6">
                   <div className="grid grid-cols-3 gap-3">
-                    <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800">
-                      <div className="text-[10px] font-bold text-slate-400 uppercase">Total Tenants</div>
-                      <div className="text-xl font-black text-white mt-1">{platformReport.total_companies}</div>
+                    <div className="p-3.5 rounded-xl bg-[#F4F5F8] dark:bg-[#0C1017] border border-slate-200 dark:border-slate-800">
+                      <div className="text-[10px] font-bold text-slate-500 uppercase">Total Tenants</div>
+                      <div className="text-xl font-black font-mono text-slate-900 dark:text-white mt-1">{platformReport.total_companies}</div>
                     </div>
-                    <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800">
-                      <div className="text-[10px] font-bold text-slate-400 uppercase">Active / Inactive</div>
-                      <div className="text-xl font-black text-emerald-400 mt-1">
+                    <div className="p-3.5 rounded-xl bg-[#F4F5F8] dark:bg-[#0C1017] border border-slate-200 dark:border-slate-800">
+                      <div className="text-[10px] font-bold text-slate-500 uppercase">Active / Inactive</div>
+                      <div className="text-xl font-black font-mono text-emerald-600 dark:text-emerald-400 mt-1">
                         {platformReport.active_companies} / {platformReport.inactive_companies}
                       </div>
                     </div>
-                    <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800">
-                      <div className="text-[10px] font-bold text-slate-400 uppercase">Global Products</div>
-                      <div className="text-xl font-black text-indigo-400 mt-1">{platformReport.total_products}</div>
+                    <div className="p-3.5 rounded-xl bg-[#F4F5F8] dark:bg-[#0C1017] border border-slate-200 dark:border-slate-800">
+                      <div className="text-[10px] font-bold text-slate-500 uppercase">Global Products</div>
+                      <div className="text-xl font-black font-mono text-teal-600 dark:text-teal-400 mt-1">{platformReport.total_products}</div>
                     </div>
                   </div>
 
                   <div>
-                    <div className="text-xs font-bold text-slate-300 mb-2">Industry Distribution:</div>
+                    <div className="text-xs font-bold text-slate-700 dark:text-slate-300 mb-2">Industry Distribution:</div>
                     <div className="flex flex-wrap gap-2">
                       {Object.entries(platformReport.industries_breakdown || {}).map(([ind, cnt]) => (
-                        <span key={ind} className="px-3 py-1.5 rounded-xl bg-slate-950 border border-slate-800 text-xs text-slate-300">
-                          {ind}: <strong className="text-indigo-400">{cnt as number}</strong>
+                        <span key={ind} className="px-3 py-1.5 rounded-xl bg-[#F4F5F8] dark:bg-[#0C1017] border border-slate-200 dark:border-slate-800 text-xs text-slate-700 dark:text-slate-300">
+                          {ind}: <strong className="text-teal-600 dark:text-teal-400 font-mono">{cnt as number}</strong>
                         </span>
                       ))}
                     </div>
@@ -986,19 +1642,102 @@ export const SuperAdminConsole: React.FC = () => {
             </div>
 
             {platformReport && (
-              <div className="flex items-center justify-between px-6 sm:px-8 py-4 border-t border-slate-800 shrink-0 bg-slate-900/95">
-                <span className="text-[11px] text-slate-500">
+              <div className="flex items-center justify-between px-6 sm:px-8 py-4 border-t border-slate-200 dark:border-slate-800/80 shrink-0 bg-slate-50 dark:bg-[#0C1017]">
+                <span className="text-[11px] text-slate-500 font-mono">
                   Format: RFC-4180 Standard CSV Export
                 </span>
                 <button
                   onClick={exportReportCSV}
-                  className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center gap-2 shadow-lg shadow-emerald-500/20 transition-all"
+                  className="px-4 py-2 rounded-xl bg-teal-700 hover:bg-teal-800 text-white text-xs font-bold flex items-center gap-2 shadow-subtle transition-all"
                 >
                   <Download className="w-4 h-4" />
                   <span>Download CSV Report</span>
                 </button>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* DEACTIVATE / ACTIVATE CONFIRMATION MODAL */}
+      {isDeactivateModalOpen && companyToDeactivate && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-slate-950/80 backdrop-blur-md animate-in fade-in duration-200">
+          <div className="w-full max-w-md bg-white dark:bg-[#131924] border border-slate-200 dark:border-slate-800 rounded-3xl shadow-2xl p-6 sm:p-8 space-y-6">
+            <div className="flex items-center gap-3">
+              <div className={`p-3 rounded-2xl ${!companyToDeactivate.is_active || companyToDeactivate.is_archived ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20' : 'bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/20'}`}>
+                {!companyToDeactivate.is_active || companyToDeactivate.is_archived ? (
+                  <Power className="w-6 h-6" />
+                ) : (
+                  <PowerOff className="w-6 h-6" />
+                )}
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-slate-900 dark:text-white">
+                  {!companyToDeactivate.is_active || companyToDeactivate.is_archived ? 'Activate Organization' : 'Deactivate Organization'}
+                </h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 font-mono">{companyToDeactivate.name}</p>
+              </div>
+            </div>
+
+            <div className="p-4 rounded-2xl bg-[#F4F5F8] dark:bg-[#0C1017] border border-slate-200 dark:border-slate-800 text-xs text-slate-700 dark:text-slate-300 space-y-3">
+              {!companyToDeactivate.is_active || companyToDeactivate.is_archived ? (
+                <p>
+                  Activating this organization will re-enable full platform access. Its administrators and users will be able to log in to their workspaces immediately.
+                </p>
+              ) : (
+                <>
+                  <div className="flex items-center gap-1.5 text-rose-600 dark:text-rose-400 font-semibold">
+                    <AlertTriangle className="w-4 h-4 shrink-0 text-rose-500" />
+                    <span>User login will be blocked immediately</span>
+                  </div>
+                  <p>
+                    When deactivated, no user or administrator belonging to <strong>{companyToDeactivate.name}</strong> will be able to log in. Any existing active sessions will be terminated and they will see the notice:
+                  </p>
+                  <div className="p-2.5 rounded-xl bg-white dark:bg-[#131924] border border-slate-200 dark:border-slate-800 text-rose-600 dark:text-rose-400 font-mono text-[11px]">
+                    "Your account has been deactivated. Please contact support."
+                  </div>
+                  <p className="text-slate-500 dark:text-slate-400 text-[11px]">
+                    Tenant records, SKUs, and immutable ledgers remain securely preserved. You can reactivate this organization at any time.
+                  </p>
+                </>
+              )}
+            </div>
+
+            <div className="flex items-center justify-end gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsDeactivateModalOpen(false);
+                  setCompanyToDeactivate(null);
+                }}
+                className="px-4 py-2 rounded-xl bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 text-xs font-semibold text-slate-700 dark:text-slate-300 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isDeactivating}
+                onClick={handleConfirmDeactivateToggle}
+                className={`px-4 py-2 rounded-xl text-xs font-bold text-white shadow-lg transition-all flex items-center gap-2 ${
+                  !companyToDeactivate.is_active || companyToDeactivate.is_archived
+                    ? 'bg-emerald-600 hover:bg-emerald-500 shadow-emerald-500/20'
+                    : 'bg-rose-600 hover:bg-rose-500 shadow-rose-500/20'
+                }`}
+              >
+                {isDeactivating ? (
+                  <span>Processing...</span>
+                ) : (
+                  <>
+                    {!companyToDeactivate.is_active || companyToDeactivate.is_archived ? (
+                      <Power className="w-4 h-4" />
+                    ) : (
+                      <PowerOff className="w-4 h-4" />
+                    )}
+                    <span>{!companyToDeactivate.is_active || companyToDeactivate.is_archived ? 'Confirm Activation' : 'Confirm Deactivation'}</span>
+                  </>
+                )}
+              </button>
+            </div>
           </div>
         </div>
       )}

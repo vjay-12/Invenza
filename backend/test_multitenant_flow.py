@@ -30,7 +30,7 @@ async def test_flow():
             "company_name": company_name,
             "industry": "Pharmaceuticals & Healthcare",
             "location": "Boston Research Park, MA",
-            "currency_code": "USD",
+            "currency_code": "INR",
             "admin_full_name": "Dr. Marcus Vance",
             "admin_email": admin_email,
             "admin_password": "NovaSecurePassword2026!",

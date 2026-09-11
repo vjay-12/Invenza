@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react';
-import { X } from 'lucide-react';
+import { IconX as X } from '../icons';
 
 interface ModalProps {
   isOpen: boolean;
@@ -7,6 +7,7 @@ interface ModalProps {
   title: string;
   subtitle?: string;
   children: React.ReactNode;
+  footer?: React.ReactNode;
   maxWidth?: 'sm' | 'md' | 'lg' | 'xl' | '2xl' | '3xl';
 }
 
@@ -16,6 +17,7 @@ export const Modal: React.FC<ModalProps> = ({
   title,
   subtitle,
   children,
+  footer,
   maxWidth = 'lg',
 }) => {
   useEffect(() => {
@@ -44,35 +46,44 @@ export const Modal: React.FC<ModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4">
       {/* Backdrop */}
       <div
-        className="fixed inset-0 bg-slate-950/60 backdrop-blur-sm transition-opacity"
+        className="fixed inset-0 bg-slate-950/70 transition-opacity"
         onClick={onClose}
       />
 
       {/* Modal Dialog */}
       <div
-        className={`relative w-full ${widthClasses[maxWidth]} rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-2xl transition-all z-10 max-h-[90vh] flex flex-col`}
+        className={`relative w-full ${widthClasses[maxWidth]} rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#131924] shadow-modal transition-all z-10 max-h-[92vh] flex flex-col`}
       >
-        {/* Header */}
-        <div className="flex items-start justify-between border-b border-slate-100 dark:border-slate-800/80 px-6 py-4">
+        {/* Header - Always pinned at top */}
+        <div className="flex items-start justify-between border-b border-slate-100 dark:border-slate-800 px-6 py-4 shrink-0">
           <div>
-            <h3 className="text-lg font-semibold text-slate-900 dark:text-white">{title}</h3>
+            <h3 className="text-base font-bold text-slate-900 dark:text-white">{title}</h3>
             {subtitle && (
-              <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">{subtitle}</p>
+              <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">{subtitle}</p>
             )}
           </div>
           <button
+            type="button"
             onClick={onClose}
             className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-800 dark:hover:text-slate-200 transition-colors"
+            aria-label="Close modal"
           >
             <X className="h-5 w-5" />
           </button>
         </div>
 
-        {/* Content */}
-        <div className="overflow-y-auto px-6 py-5 flex-1">{children}</div>
+        {/* Content - Scrollable area */}
+        <div className="overflow-y-auto px-6 py-4 flex-1 min-h-0">{children}</div>
+
+        {/* Pinned Footer - Always visible outside the scroll area */}
+        {footer && (
+          <div className="border-t border-slate-100 dark:border-slate-800 px-6 py-3 bg-slate-50 dark:bg-[#0C1017] rounded-b-xl shrink-0">
+            {footer}
+          </div>
+        )}
       </div>
     </div>
   );

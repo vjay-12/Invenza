@@ -99,7 +99,7 @@ Invenza/
 │       ├── types/
 │       │   └── inventory.ts         # TypeScript interfaces
 │       ├── data/
-│       │   └── mockData.ts          # Enterprise seed dataset
+│       │   └── platformConstants.ts # Industry & platform module definitions
 │       ├── context/
 │       │   ├── InventoryContext.tsx # Central state manager & ledger aggregator
 │       │   └── ThemeContext.tsx     # Dark / Light theme manager
