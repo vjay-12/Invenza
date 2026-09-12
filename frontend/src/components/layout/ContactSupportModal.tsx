@@ -106,7 +106,7 @@ export const ContactSupportModal: React.FC<ContactSupportModalProps> = ({
                 >
                   <option value="technical">Technical Support & Infrastructure</option>
                   <option value="ledger">Movement Ledger & Audit Discrepancies</option>
-                  <option value="invoicing">GST Tax Invoicing & E-Way Bills</option>
+                  <option value="invoicing">Tax Invoicing & Compliance</option>
                   <option value="api">SAP / ERP Webhook Integration</option>
                   <option value="other">General Account Inquiry</option>
                 </select>

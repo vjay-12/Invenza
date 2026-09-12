@@ -36,6 +36,8 @@ export interface Product {
   warehouseId?: string;                      // Default/primary warehouse location id
   hsnCode: string;                           // HSN/SAC code e.g. 8471
   gstRate: number;                           // GST rate percentage e.g. 18.0 (0, 5, 18, 40)
+  taxCode?: string;                          // Generic tax classification code alias
+  taxRate?: number;                          // Generic tax rate percentage alias
   variantAttributes: Record<string, string>; // e.g. { Color: "Midnight Blue", Size: "XL" }
   customFields: Record<string, any>;         // e.g. { batchNumber: "B-2026-X", expiryDate: "2027-12-31" }
   currentStock: number;                      // Aggregated from ledger
@@ -140,6 +142,8 @@ export interface InvoiceItem {
   sgstAmount: number;
   igstRate: number;
   igstAmount: number;
+  singleTaxRate?: number;
+  singleTaxAmount?: number;
   total: number;
 }
 
@@ -172,7 +176,13 @@ export interface Invoice {
   roundOff: number;
   grandTotal: number;
   grandTotalWords: string;
+  taxType?: string;
+  currencyCode?: string;
+  totalSingleTax?: number;
   pdfUrl?: string;
+  paidAt?: string;
+  paymentMethod?: string;
+  paymentReference?: string;
   items: InvoiceItem[];
 }
 

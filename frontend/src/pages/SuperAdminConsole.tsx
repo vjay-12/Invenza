@@ -38,12 +38,14 @@ import {
 import { api } from '../services/api';
 import { PageMeta } from '../components/common/PageMeta';
 import { SimpleSelectDropdown, DropdownOption } from '../components/common/SimpleSelectDropdown';
-import { INDUSTRIES_LIST, AVAILABLE_MODULES, INDIAN_STATES_LIST } from '../data/platformConstants';
+import { INDUSTRIES_LIST, AVAILABLE_MODULES, INDIAN_STATES_LIST, SUPPORTED_COUNTRIES, US_STATES_LIST, COUNTRY_CURRENCY_MAP, CURRENCY_SYMBOLS, currencySymbolFor } from '../data/platformConstants';
+import { useAuth } from '../context/AuthContext';
 export { INDUSTRIES_LIST, AVAILABLE_MODULES };
 
 export const SuperAdminConsole: React.FC<{
   onNavigate?: (tab: string, params?: Record<string, string>) => void;
 }> = ({ onNavigate }) => {
+  const { switchTenant } = useAuth();
   const [companies, setCompanies] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshingCompanies, setIsRefreshingCompanies] = useState(false);
@@ -83,9 +85,9 @@ export const SuperAdminConsole: React.FC<{
   const [provCompanyCode, setProvCompanyCode] = useState('');
   const [provIndustry, setProvIndustry] = useState(INDUSTRIES_LIST[0]);
   const [provLocation, setProvLocation] = useState('');
+  const [provCountry, setProvCountry] = useState('IN');
   const [provState, setProvState] = useState('');
   const [provPincode, setProvPincode] = useState('');
-  const [provCurrency, setProvCurrency] = useState('INR');
   const [provSetupFee, setProvSetupFee] = useState('25000');
   const [provMonthlyRate, setProvMonthlyRate] = useState('4500');
   const [provAdminName, setProvAdminName] = useState('');
@@ -254,9 +256,9 @@ export const SuperAdminConsole: React.FC<{
     setProvCompanyCode(lead.company_code || '');
     setProvIndustry(INDUSTRIES_LIST.includes(lead.industry) ? lead.industry : INDUSTRIES_LIST[0]);
     setProvLocation(lead.location || 'Headquarters');
+    setProvCountry(SUPPORTED_COUNTRIES.some((c) => c.code === lead.country_code) ? lead.country_code : 'IN');
     setProvState(lead.state || '');
     setProvPincode(lead.pincode || '');
-    setProvCurrency('INR');
     setProvSetupFee(lead.quoted_amount ? String(lead.quoted_amount) : '25000');
     setProvMonthlyRate('4500');
     setProvAdminName(lead.contact_name || '');
@@ -296,6 +298,10 @@ export const SuperAdminConsole: React.FC<{
       showToast('Please enter a valid non-negative Monthly Maintenance Rate (can be ₹0).', 'error');
       return;
     }
+    if (provCountry === 'US' && !provState.trim()) {
+      showToast('Please select a US state before provisioning.', 'error');
+      return;
+    }
 
     setIsSubmittingProvision(true);
     try {
@@ -305,9 +311,9 @@ export const SuperAdminConsole: React.FC<{
         unique_code: provCompanyCode.trim() || undefined,
         industry: provIndustry,
         location: provLocation.trim() || 'Headquarters',
-        state: provState.trim() || undefined,
+        state: provShowState && provState.trim() ? provState.trim() : undefined,
         pincode: provPincode.trim() || undefined,
-        currency_code: provCurrency,
+        country_code: provCountry,
         setup_fee: setupFeeNum,
         monthly_maintenance_fee: monthlyRateNum,
         admin_full_name: provAdminName.trim(),
@@ -344,9 +350,9 @@ export const SuperAdminConsole: React.FC<{
     setProvCompanyCode('');
     setProvIndustry(INDUSTRIES_LIST[0]);
     setProvLocation('');
+    setProvCountry('IN');
     setProvState('');
     setProvPincode('');
-    setProvCurrency('INR');
     setProvSetupFee('25000');
     setProvMonthlyRate('4500');
     setProvAdminName('');
@@ -404,7 +410,6 @@ export const SuperAdminConsole: React.FC<{
         unique_code: companyToEdit.unique_code || companyToEdit.company_code,
         industry: companyToEdit.industry,
         location: companyToEdit.location,
-        currency_code: companyToEdit.currency_code,
         enabled_modules: companyToEdit.enabled_modules,
         is_active: companyToEdit.is_active,
       });
@@ -496,6 +501,17 @@ export const SuperAdminConsole: React.FC<{
     { value: 'declined', label: 'Declined' },
   ];
 
+  const handleProvCountryChange = (code: string) => {
+    setProvCountry(code);
+    setProvState('');
+  };
+
+  const provCountryName = SUPPORTED_COUNTRIES.find((c) => c.code === provCountry)?.name || provCountry;
+  const provDerivedCurrency = COUNTRY_CURRENCY_MAP[provCountry] || 'INR';
+  const provCurrencySymbol = CURRENCY_SYMBOLS[provDerivedCurrency] || '₹';
+  const provStateList = provCountry === 'US' ? US_STATES_LIST : INDIAN_STATES_LIST;
+  const provShowState = provCountry === 'IN' || provCountry === 'US';
+
   return (
     <div className="space-y-4 sm:space-y-4.5 animate-in fade-in duration-200 pb-2">
       <PageMeta
@@ -507,8 +523,8 @@ export const SuperAdminConsole: React.FC<{
       {toastMessage && (
         <div className={`fixed top-5 right-5 z-50 px-4 py-3 rounded-xl shadow-2xl flex items-center gap-3 border text-sm font-semibold animate-in slide-in-from-top duration-200 ${
           toastMessage.type === 'success'
-            ? 'bg-emerald-950/90 border-emerald-500/40 text-emerald-300 backdrop-blur-xl'
-            : 'bg-rose-950/90 border-rose-500/40 text-rose-300 backdrop-blur-xl'
+            ? 'bg-emerald-50 border-emerald-300 text-emerald-700 dark:bg-emerald-950/90 dark:border-emerald-500/40 dark:text-emerald-300 backdrop-blur-xl'
+            : 'bg-rose-50 border-rose-300 text-rose-700 dark:bg-rose-950/90 dark:border-rose-500/40 dark:text-rose-300 backdrop-blur-xl'
         }`}>
           {toastMessage.type === 'success' ? (
             <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" />
@@ -948,20 +964,35 @@ export const SuperAdminConsole: React.FC<{
                     </div>
 
                     <div>
-                      <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">State (GST Invoicing) *</label>
-                      <select
-                        value={provState}
-                        onChange={(e) => setProvState(e.target.value)}
-                        className="w-full px-3.5 py-2 rounded-xl bg-[#F4F5F8] dark:bg-[#0C1017] border border-slate-200 dark:border-slate-800 text-xs text-slate-900 dark:text-white focus:outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500"
-                      >
-                        <option value="">Select State / UT...</option>
-                        {INDIAN_STATES_LIST.map((s) => (
-                          <option key={s.code} value={s.name}>
-                            {s.code} - {s.name}
-                          </option>
-                        ))}
-                      </select>
+                      <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">Country of Registration *</label>
+                      <SimpleSelectDropdown
+                        options={SUPPORTED_COUNTRIES.map((c) => ({ value: c.code, label: c.name }))}
+                        value={provCountry}
+                        onChange={handleProvCountryChange}
+                        placeholder="Select country..."
+                      />
+                      <p className="text-[10px] text-slate-500 mt-1">Country, state &amp; currency are locked after provisioning.</p>
                     </div>
+
+                    {provShowState && (
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                          State {provCountry === 'US' ? '(Sales Tax Jurisdiction)' : '(GST Invoicing)'} *
+                        </label>
+                        <select
+                          value={provState}
+                          onChange={(e) => setProvState(e.target.value)}
+                          className="w-full px-3.5 py-2 rounded-xl bg-[#F4F5F8] dark:bg-[#0C1017] border border-slate-200 dark:border-slate-800 text-xs text-slate-900 dark:text-white focus:outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500"
+                        >
+                          <option value="">{provCountry === 'US' ? 'Select US State...' : 'Select State / UT...'}</option>
+                          {provStateList.map((s) => (
+                            <option key={s.code} value={s.name}>
+                              {s.code} - {s.name}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
 
                     <div>
                       <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">Postal Pincode (6 digits) *</label>
@@ -976,21 +1007,11 @@ export const SuperAdminConsole: React.FC<{
                     </div>
 
                     <div>
-                      <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">Base Currency</label>
-                      <SimpleSelectDropdown
-                        options={[
-                          { value: 'INR', label: 'INR (₹) - Indian Rupee' },
-                          { value: 'USD', label: 'USD ($)' },
-                          { value: 'EUR', label: 'EUR (€)' },
-                          { value: 'GBP', label: 'GBP (£)' },
-                          { value: 'AED', label: 'AED (د.إ)' },
-                          { value: 'SGD', label: 'SGD (S$)' },
-                          { value: 'CAD', label: 'CAD (C$)' },
-                          { value: 'AUD', label: 'AUD (A$)' },
-                        ]}
-                        value={provCurrency}
-                        onChange={setProvCurrency}
-                      />
+                      <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">Base Currency (Auto-Derived)</label>
+                      <div className="w-full px-3.5 py-2 rounded-xl bg-slate-100 dark:bg-[#0C1017] border border-slate-200 dark:border-slate-800 text-xs font-mono font-bold text-slate-500 dark:text-slate-400 flex items-center gap-2">
+                        <Lock className="w-3.5 h-3.5 shrink-0" />
+                        <span>{provDerivedCurrency} ({provCurrencySymbol}) — auto-derived from {provCountryName}</span>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -1004,10 +1025,10 @@ export const SuperAdminConsole: React.FC<{
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
                       <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                        One-Time Setup Fee (₹) *
+                        One-Time Setup Fee ({provCurrencySymbol}) *
                       </label>
                       <div className="relative">
-                        <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400">₹</span>
+                        <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400">{provCurrencySymbol}</span>
                         <input
                           type="number"
                           required
@@ -1024,10 +1045,10 @@ export const SuperAdminConsole: React.FC<{
 
                     <div>
                       <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                        Initial Monthly Maintenance Rate (₹) *
+                        Initial Monthly Maintenance Rate ({provCurrencySymbol}) *
                       </label>
                       <div className="relative">
-                        <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400">₹</span>
+                        <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400">{provCurrencySymbol}</span>
                         <input
                           type="number"
                           required
@@ -1039,7 +1060,7 @@ export const SuperAdminConsole: React.FC<{
                           className="w-full pl-8 pr-3.5 py-2 rounded-xl bg-[#F4F5F8] dark:bg-[#0C1017] border border-slate-200 dark:border-slate-800 text-xs font-mono font-bold text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500"
                         />
                       </div>
-                      <p className="text-[10px] text-slate-500 mt-1">Recurring rate for monthly maintenance. Can be ₹0.</p>
+                      <p className="text-[10px] text-slate-500 mt-1">Recurring rate for monthly maintenance. Can be {provCurrencySymbol}0.</p>
                     </div>
                   </div>
                 </div>
@@ -1281,9 +1302,10 @@ export const SuperAdminConsole: React.FC<{
                       <MapPin className="w-4 h-4" />
                     </div>
                     <div className="min-w-0">
-                      <div className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wide">Primary Location / HQ</div>
+                      <div className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wide">Country &amp; Primary Location / HQ</div>
                       <div className="text-xs font-bold text-slate-800 dark:text-slate-200 mt-0.5">
-                        {selectedCompanyForDetail.location || 'Headquarters'}
+                        {SUPPORTED_COUNTRIES.find((c) => c.code === selectedCompanyForDetail.country_code)?.name || selectedCompanyForDetail.country_code || 'India'}
+                        {selectedCompanyForDetail.location && ` \u2022 ${selectedCompanyForDetail.location}`}
                         {selectedCompanyForDetail.state && `, ${selectedCompanyForDetail.state}`}
                         {selectedCompanyForDetail.pincode && ` - ${selectedCompanyForDetail.pincode}`}
                       </div>
@@ -1299,9 +1321,12 @@ export const SuperAdminConsole: React.FC<{
                     <div className="min-w-0">
                       <div className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wide">Base Valuation Currency</div>
                       <div className="text-xs font-bold text-emerald-600 dark:text-emerald-300 mt-0.5">
-                        {selectedCompanyForDetail.currency || 'INR'}
+                        {selectedCompanyForDetail.currency_code ||
+                          COUNTRY_CURRENCY_MAP[selectedCompanyForDetail.country_code] ||
+                          selectedCompanyForDetail.currency ||
+                          'INR'}
                       </div>
-                      <div className="text-[10px] text-slate-500 mt-0.5">Default ledger & costing currency</div>
+                      <div className="text-[10px] text-slate-500 mt-0.5">Auto-derived from country of registration &bull; locked</div>
                     </div>
                   </div>
                 </div>
@@ -1419,6 +1444,32 @@ export const SuperAdminConsole: React.FC<{
                 type="button"
                 onClick={() => {
                   const comp = selectedCompanyForDetail;
+                  if (comp) {
+                    switchTenant({
+                      id: comp.id,
+                      name: comp.name,
+                      currency: comp.currency,
+                      country: comp.country,
+                      state: comp.state,
+                      tax_type: comp.tax_type,
+                      tax_rate: comp.tax_rate,
+                      tax_label: comp.tax_label,
+                    });
+                    setIsDetailModalOpen(false);
+                    if (onNavigate) {
+                      onNavigate('products');
+                    }
+                  }
+                }}
+                className="px-3.5 py-2 rounded-xl bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold flex items-center gap-1.5 transition-colors shadow-sm"
+              >
+                <Eye className="w-3.5 h-3.5" />
+                <span>Inspect Workspace</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const comp = selectedCompanyForDetail;
                   setIsDetailModalOpen(false);
                   handleOpenAnalytics(comp);
                 }}
@@ -1482,7 +1533,7 @@ export const SuperAdminConsole: React.FC<{
                     <div className="p-4 rounded-2xl bg-[#F4F5F8] dark:bg-[#0C1017] border border-slate-200 dark:border-slate-800">
                       <div className="text-[11px] font-bold text-slate-500 uppercase">Total Valuation</div>
                       <div className="text-2xl font-black font-mono text-emerald-600 dark:text-emerald-400 mt-1">
-                        ₹{analyticsData.total_inventory_valuation.toLocaleString('en-IN')}
+                        {CURRENCY_SYMBOLS[activeCompanyForAnalytics.currency || 'INR'] || '₹'}{analyticsData.total_inventory_valuation.toLocaleString()}
                       </div>
                       <div className="text-[10px] text-slate-500">Cost valuation</div>
                     </div>

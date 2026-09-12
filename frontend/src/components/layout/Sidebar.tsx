@@ -58,7 +58,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   isMobileOpen = false,
   onCloseMobile,
 }) => {
-  const { products, purchaseOrders, salesOrders } = useInventory();
+  const { products, purchaseOrders, salesOrders, taxConfig } = useInventory();
   const { user, isSuperAdmin, isCompanyAdmin } = useAuth();
 
   const [newLeadsCount, setNewLeadsCount] = useState<number>(0);
@@ -191,7 +191,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         },
         {
           id: 'invoices' as TabType,
-          label: 'GST Invoices',
+          label: 'Invoices',
           icon: IconFileText,
         }
       );

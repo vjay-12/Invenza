@@ -117,6 +117,8 @@ class BillingOrgSummary(BaseModel):
     company_code: Optional[str] = None
     industry: Optional[str] = None
     tier: Optional[str] = "Growth Suite"
+    country_code: str = "IN"
+    currency_code: str = "INR"
     setup_fee_amount: float = 0.0
     setup_fee_status: str = "Pending"  # 'Pending', 'Paid'
     setup_fee: float = 0.0  # backward compat
@@ -138,6 +140,9 @@ class BillingOverviewResponse(BaseModel):
     zero_maintenance_orgs_count: int
     zero_maintenance_orgs: Optional[int] = None  # backward compat
     overdue_count: int
+    # Per-currency subtotals — never sum across currencies when >1 is present
+    revenue_by_currency: Dict[str, float] = Field(default_factory=dict)
+    mrr_by_currency: Dict[str, float] = Field(default_factory=dict)
     organizations: List[BillingOrgSummary]
     tenants: Optional[List[BillingOrgSummary]] = None
 
@@ -241,6 +246,8 @@ class BillingTransactionItem(BaseModel):
 
 class OrgBillingDetailResponse(BaseModel):
     org: Dict[str, Any]
+    country_code: str = "IN"
+    currency_code: str = "INR"
     setup_fee: OrgSetupFeeResponse
     current_plan: OrgMaintenancePlanResponse
     rate_history: List[OrgMaintenancePlanResponse]

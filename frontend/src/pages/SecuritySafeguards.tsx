@@ -31,6 +31,8 @@ export const SecuritySafeguards: React.FC<SecuritySafeguardsProps> = ({ onNaviga
   const [queueRequests, setQueueRequests] = useState<any[]>([]);
   const [isLoadingQueue, setIsLoadingQueue] = useState(true);
   const [queueStatusFilter, setQueueStatusFilter] = useState<string>('all');
+  const [queueActionFilter, setQueueActionFilter] = useState<string>('all');
+  const [queueSearchTerm, setQueueSearchTerm] = useState<string>('');
   const [processingRequestId, setProcessingRequestId] = useState<string | null>(null);
 
   // Confirmation Modal for High-Impact Approval/Rejection
@@ -102,7 +104,7 @@ export const SecuritySafeguards: React.FC<SecuritySafeguardsProps> = ({ onNaviga
     setProcessingRequestId(req.id);
     try {
       await api.approveSecurityRequest(req.id, actionNotes);
-      showToast(`Privileged action "${req.action_type}" approved and executed for ${req.tenant_name}.`);
+      showToast(`Privileged action "${formatActionLabel(req.action_type)}" approved and executed for ${req.tenant_name}.`);
       setActionConfirmModal(null);
       setActionNotes('');
       loadQueue();
@@ -120,7 +122,7 @@ export const SecuritySafeguards: React.FC<SecuritySafeguardsProps> = ({ onNaviga
     setProcessingRequestId(req.id);
     try {
       await api.rejectSecurityRequest(req.id, actionNotes || 'Rejected by Super Administrator');
-      showToast(`Request "${req.action_type}" rejected for ${req.tenant_name}.`);
+      showToast(`Request "${formatActionLabel(req.action_type)}" rejected for ${req.tenant_name}.`);
       setActionConfirmModal(null);
       setActionNotes('');
       loadQueue();
@@ -158,6 +160,31 @@ export const SecuritySafeguards: React.FC<SecuritySafeguardsProps> = ({ onNaviga
     { value: 'rejected', label: 'Rejected Actions' },
   ];
 
+  const queueActionOptions: DropdownOption[] = [
+    { value: 'all', label: 'All Action Types' },
+    { value: 'ledger_purge', label: 'Ledger Purge' },
+    { value: 'export_customer_data', label: 'Export Customer Data' },
+    { value: 'remove_last_admin', label: 'Remove Last Admin' },
+    { value: 'waive_maintenance_fee', label: 'Waive Maintenance Fee' },
+    { value: 'deactivate_tenant', label: 'Deactivate Organization' },
+  ];
+
+  const filteredQueueRequests = queueRequests.filter((r) => {
+    if (queueActionFilter !== 'all' && r.action_type !== queueActionFilter) return false;
+    if (queueSearchTerm.trim()) {
+      const q = queueSearchTerm.toLowerCase();
+      const match =
+        r.action_type?.toLowerCase().includes(q) ||
+        r.tenant_name?.toLowerCase().includes(q) ||
+        r.requester_name?.toLowerCase().includes(q) ||
+        r.requester_email?.toLowerCase().includes(q) ||
+        r.target_id?.toLowerCase().includes(q) ||
+        r.reason?.toLowerCase().includes(q);
+      if (!match) return false;
+    }
+    return true;
+  });
+
   const auditActionOptions: DropdownOption[] = [
     { value: 'all', label: 'All Action Categories' },
     { value: 'company_provisioned', label: 'Company Provisioning' },
@@ -187,8 +214,8 @@ export const SecuritySafeguards: React.FC<SecuritySafeguardsProps> = ({ onNaviga
         <div
           className={`fixed top-5 right-5 z-50 px-4 py-3 rounded-xl shadow-2xl flex items-center gap-3 border text-sm font-semibold animate-in slide-in-from-top duration-200 ${
             toastMessage.type === 'success'
-              ? 'bg-emerald-950/90 border-emerald-500/40 text-emerald-300 backdrop-blur-xl'
-              : 'bg-rose-950/90 border-rose-500/40 text-rose-300 backdrop-blur-xl'
+              ? 'bg-emerald-50 border-emerald-300 text-emerald-700 dark:bg-emerald-950/90 dark:border-emerald-500/40 dark:text-emerald-300 backdrop-blur-xl'
+              : 'bg-rose-50 border-rose-300 text-rose-700 dark:bg-rose-950/90 dark:border-rose-500/40 dark:text-rose-300 backdrop-blur-xl'
           }`}
         >
           {toastMessage.type === 'success' ? (
@@ -228,23 +255,21 @@ export const SecuritySafeguards: React.FC<SecuritySafeguardsProps> = ({ onNaviga
       </div>
 
       {/* Sub-Section Tab Navigation */}
-      <div className="flex items-center gap-2 border-b border-slate-200 dark:border-slate-800/80 pb-2">
+      <div className="flex items-center gap-2 border-b border-slate-200 dark:border-slate-800 pb-2">
         <button
           type="button"
           onClick={() => setActiveSection('queue')}
-          className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold transition-all ${
+          className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-bold transition-all ${
             activeSection === 'queue'
-              ? 'bg-teal-700 text-white shadow-subtle'
-              : 'bg-white dark:bg-[#131924] border border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+              ? 'bg-teal-500/10 text-teal-600 dark:text-teal-400 border border-teal-500/30'
+              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
           }`}
         >
-          <Shield className="w-3.5 h-3.5" />
+          <Clock className="w-3.5 h-3.5" />
           <span>Approval Queue</span>
           {pendingQueueCount > 0 && (
-            <span className={`px-1.5 py-0.2 rounded text-[10px] font-mono font-bold ${
-              activeSection === 'queue' ? 'bg-teal-800 text-teal-100' : 'bg-amber-500/20 text-amber-700 dark:text-amber-400'
-            }`}>
-              {pendingQueueCount} Action Required
+            <span className="px-1.5 py-0.2 rounded-full text-[10px] font-mono font-bold bg-amber-500 text-white animate-pulse">
+              {pendingQueueCount}
             </span>
           )}
         </button>
@@ -252,10 +277,10 @@ export const SecuritySafeguards: React.FC<SecuritySafeguardsProps> = ({ onNaviga
         <button
           type="button"
           onClick={() => setActiveSection('audit')}
-          className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold transition-all ${
+          className={`flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-bold transition-all ${
             activeSection === 'audit'
-              ? 'bg-teal-700 text-white shadow-subtle'
-              : 'bg-white dark:bg-[#131924] border border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+              ? 'bg-teal-500/10 text-teal-600 dark:text-teal-400 border border-teal-500/30'
+              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
           }`}
         >
           <FileText className="w-3.5 h-3.5" />
@@ -268,59 +293,85 @@ export const SecuritySafeguards: React.FC<SecuritySafeguardsProps> = ({ onNaviga
       {activeSection === 'queue' && (
         <div className="space-y-3.5">
           {/* Action Filter Bar */}
-          <div className="flex items-center justify-between gap-3 p-3 rounded-xl bg-white dark:bg-[#131924] border border-slate-200 dark:border-slate-800 shadow-card">
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-bold text-slate-900 dark:text-white">Dual-Authorization Requests</span>
-              <span className="text-[11px] text-slate-500">
-                Sensitive actions requiring explicit Super Admin consensus
-              </span>
-            </div>
-            <div className="w-56 shrink-0">
-              <SimpleSelectDropdown
-                options={queueFilterOptions}
-                value={queueStatusFilter}
-                onChange={setQueueStatusFilter}
-                placeholder="Filter Status"
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 p-3 rounded-xl bg-white dark:bg-[#131924] border border-slate-200 dark:border-slate-800 shadow-card">
+            <div className="relative flex-1">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+              <input
+                type="text"
+                placeholder="Search by action, organization, requester email, reference ID..."
+                value={queueSearchTerm}
+                onChange={(e) => setQueueSearchTerm(e.target.value)}
+                className="w-full pl-9 pr-4 py-2 rounded-lg bg-[#F8FAFC] dark:bg-[#0C1017] border border-slate-200 dark:border-slate-800 text-xs text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:border-teal-500"
               />
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="w-48 shrink-0">
+                <SimpleSelectDropdown
+                  options={queueActionOptions}
+                  value={queueActionFilter}
+                  onChange={setQueueActionFilter}
+                  placeholder="Action Type"
+                />
+              </div>
+              <div className="w-48 shrink-0">
+                <SimpleSelectDropdown
+                  options={queueFilterOptions}
+                  value={queueStatusFilter}
+                  onChange={setQueueStatusFilter}
+                  placeholder="Filter Status"
+                />
+              </div>
             </div>
           </div>
 
           {/* Queue Items Table */}
           <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#131924] overflow-hidden shadow-card">
             <div className="w-full overflow-x-auto">
-              <table className="w-full text-left text-xs table-fixed">
+              <table className="w-full text-left text-xs table-fixed min-w-[900px]">
                 <thead className="bg-[#F8FAFC] dark:bg-[#0C1017] border-b border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 font-semibold text-[10px] uppercase tracking-wider">
                   <tr>
-                    <th className="w-[20%] px-3.5 py-2.5">Action Requested</th>
-                    <th className="w-[22%] px-3.5 py-2.5">Target Organization</th>
+                    <th className="w-[26%] px-3.5 py-2.5">Action Requested</th>
+                    <th className="w-[20%] px-3.5 py-2.5">Target Organization</th>
                     <th className="w-[22%] px-3.5 py-2.5">Requester Details</th>
-                    <th className="w-[14%] px-3.5 py-2.5">Requested At</th>
+                    <th className="w-[12%] px-3.5 py-2.5">Requested At</th>
                     <th className="w-[10%] px-3.5 py-2.5">Status</th>
-                    <th className="w-[12%] px-3.5 py-2.5 text-right">Decision</th>
+                    <th className="w-[10%] px-3.5 py-2.5 text-right">Decision</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60">
-                  {queueRequests.length === 0 ? (
+                  {filteredQueueRequests.length === 0 ? (
                     <tr>
                       <td colSpan={6} className="px-6 py-14 text-center text-slate-500">
                         <Shield className="w-8 h-8 mx-auto mb-2 text-slate-400 opacity-60" />
-                        <p className="font-semibold text-sm">No pending or past requests</p>
+                        <p className="font-semibold text-sm">No requests found matching criteria</p>
                         <p className="text-xs text-slate-400 mt-1">
-                          When dangerous actions (ledger purges, last-admin removals, fee waivers) are initiated, they appear here for dual approval.
+                          When sensitive actions (ledger purges, last-admin removals, fee waivers) are initiated, they appear here for dual approval.
                         </p>
                       </td>
                     </tr>
                   ) : (
-                    queueRequests.map((r) => (
+                    filteredQueueRequests.map((r) => (
                       <tr key={r.id} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/30 transition-colors">
                         {/* Action Requested */}
                         <td className="px-3.5 py-2.5 whitespace-nowrap">
-                          <div className="flex items-center gap-1.5 min-w-0" title={r.reason || formatActionLabel(r.action_type)}>
-                            <span className={`inline-flex items-center gap-1 font-mono font-bold text-[10px] px-2 py-0.5 rounded-md border shrink-0 ${getActionBadgeColor(r.action_type)}`}>
-                              {formatActionLabel(r.action_type)}
-                            </span>
+                          <div className="flex flex-col min-w-0" title={r.reason || formatActionLabel(r.action_type)}>
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span className={`inline-flex items-center gap-1 font-mono font-bold text-[10px] px-2 py-0.5 rounded-md border shrink-0 ${getActionBadgeColor(r.action_type)}`}>
+                                {formatActionLabel(r.action_type)}
+                              </span>
+                              {(r.target_id || r.details?.reference_code) && (
+                                <span className="font-mono text-[9px] font-bold px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-700 dark:text-amber-400 border border-amber-500/20 shrink-0">
+                                  {r.target_id || r.details?.reference_code}
+                                </span>
+                              )}
+                            </div>
+                            {r.target_name && (
+                              <span className="text-[10px] font-medium text-slate-600 dark:text-slate-300 mt-0.5 truncate">
+                                Scope: {r.target_name}
+                              </span>
+                            )}
                             {r.reason && (
-                              <span className="text-[11px] text-slate-500 truncate italic">
+                              <span className="text-[11px] text-slate-500 dark:text-slate-400 truncate italic mt-0.5">
                                 "{r.reason}"
                               </span>
                             )}
@@ -395,8 +446,8 @@ export const SecuritySafeguards: React.FC<SecuritySafeguardsProps> = ({ onNaviga
                               </button>
                             </div>
                           ) : (
-                            <span className="text-[11px] text-slate-400 font-mono truncate inline-block max-w-[140px]" title={`Signed: ${r.reviewer_name || 'Admin'}`}>
-                              Signed: {r.reviewer_name || 'Admin'}
+                            <span className="text-[11px] text-slate-400 font-mono truncate inline-block max-w-[140px]" title={r.status === 'rejected' ? `Rejected: ${r.rejection_reason || 'Denied'}` : `Signed: ${r.reviewer_name || 'Admin'}`}>
+                              {r.status === 'rejected' ? 'Rejected' : `Signed: ${r.reviewer_name?.split('@')[0]?.split(' ')[0] || 'Admin'}`}
                             </span>
                           )}
                         </td>

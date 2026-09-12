@@ -4,13 +4,13 @@ import time
 import secrets
 import hashlib
 from typing import Optional, List, Dict, Any
-from uuid import UUID
+from uuid import UUID, uuid4
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Header, status
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, and_, delete
+from sqlalchemy import select, and_, or_, delete
 
 from app.core.database import get_db
 from app.core.security import verify_password
@@ -20,6 +20,8 @@ from app.models.tenant import Tenant
 from app.models.product import Product
 from app.models.ledger import StockMovement, MovementTypeEnum
 from app.models.location import Location
+from app.models.security_request import SecurityApprovalRequest
+from app.models.audit_log import AuditLog
 from app.services.ledger_service import LedgerService
 from app.services.email_service import EmailService
 
@@ -209,34 +211,32 @@ async def clear_catalog_verified(
     audit_performer = f"{operator_name} ({user_email}) [MFA: Password+OTP Verified]"
     now_utc = datetime.utcnow()
 
-    # Find active warehouse location for logging
-    loc_res = await db.execute(
-        select(Location).where(and_(Location.tenant_id == tenant_id, Location.is_active == True)).limit(1)
-    )
-    loc = loc_res.scalar_one_or_none()
+    from app.models.adjustment import StockAdjustment
+    from app.models.transfer import StockTransferItem
+    from app.models.order import PurchaseOrderItem, SalesOrderItem
+    from app.models.audit_log import AuditLog
 
-    # If products exist, record an immutable audit movement in the Movement Ledger
-    if loc and all_prods:
-        first_prod = all_prods[0]
-        audit_entry = StockMovement(
-            id=secrets.token_hex(16),
-            tenant_id=tenant_id,
-            product_id=first_prod.id,
-            location_id=loc.id,
-            movement_type=MovementTypeEnum.OUT,
-            quantity=0.0,
-            unit_cost=0.0,
-            reference_type="SYSTEM_PURGE",
-            reference_id=f"CATALOG-RESET-{int(time.time())}",
-            reason_code="catalog reset",
-            performed_by=audit_performer,
-            timestamp=now_utc,
-        )
-        db.add(audit_entry)
+    prod_ids = [p.id for p in all_prods]
 
-    # De-activate all products for this tenant (soft delete preserving integrity)
-    for p in all_prods:
-        p.is_active = False
+    # Record immutable audit trail in AuditLog
+    db.add(AuditLog(
+        actor_name=operator_name,
+        actor_email=user_email,
+        tenant_id=tenant_id,
+        action_type="CATALOG_RESET",
+        target_type="PRODUCT_CATALOG",
+        description=f"Product catalog reset: {count} SKU items permanently deleted with all stock allocations purged [MFA: Password+OTP Verified].",
+        created_at=now_utc,
+    ))
+
+    # Permanently delete all related dependent records and products for this tenant
+    if prod_ids:
+        await db.execute(delete(StockMovement).where(StockMovement.tenant_id == tenant_id))
+        await db.execute(delete(StockAdjustment).where(StockAdjustment.tenant_id == tenant_id))
+        await db.execute(delete(StockTransferItem).where(StockTransferItem.product_id.in_(prod_ids)))
+        await db.execute(delete(PurchaseOrderItem).where(PurchaseOrderItem.product_id.in_(prod_ids)))
+        await db.execute(delete(SalesOrderItem).where(SalesOrderItem.product_id.in_(prod_ids)))
+        await db.execute(delete(Product).where(Product.tenant_id == tenant_id))
 
     await db.commit()
 
@@ -245,8 +245,15 @@ async def clear_catalog_verified(
         "deleted_count": count,
         "performed_by": audit_performer,
         "timestamp": now_utc.isoformat(),
-        "message": f"Successfully reset Product Catalog ({count} items removed). Immutable audit trail record logged in Movement Ledger.",
+        "message": f"Successfully reset Product Catalog ({count} items permanently removed). Immutable audit trail record logged.",
     }
+
+def _is_valid_uuid(val: str) -> bool:
+    try:
+        UUID(str(val))
+        return True
+    except Exception:
+        return False
 
 @router.post("/request-ledger-purge")
 async def request_ledger_purge(
@@ -258,7 +265,7 @@ async def request_ledger_purge(
     """
     Destructive Action 2 (STEP 1): Requires password + email OTP verification.
     DOES NOT execute the purge immediately! Instead, submits a formal pending
-    authorization request to the Super Administrator.
+    authorization request to the Super Administrator, persisted in PostgreSQL.
     """
     user_email = (req.email or (current_user.email if current_user else "")).lower().strip()
     if not user_email:
@@ -279,28 +286,50 @@ async def request_ledger_purge(
     company_name = tenant.name if tenant else "Company Workspace"
 
     operator_name = (user.full_name or user.email) if user else "Administrator"
-    request_id = f"SAR-PURGE-{int(time.time())}-{secrets.randbelow(9000)+1000}"
+    request_code = f"SAR-PURGE-{int(time.time())}-{secrets.randbelow(9000)+1000}"
+    req_uuid = uuid4()
+    now_utc = datetime.utcnow()
 
-    purge_request = {
-        "id": request_id,
-        "tenant_id": str(tenant_id),
-        "company_name": company_name,
-        "requested_by_name": operator_name,
-        "requested_by_email": user_email,
-        "requested_by_role": user.role if user else "admin",
-        "record_count": record_count,
-        "status": "pending_super_admin_approval",
-        "requested_at": datetime.utcnow().isoformat(),
-        "otp_verified": True,
-        "otp_verified_at": datetime.utcnow().isoformat(),
-        "reason": req.reason or "Administrative reset",
-        "approved_by": None,
-        "approved_at": None,
-        "rejection_reason": None,
-    }
+    # Persist directly into central PostgreSQL SecurityApprovalRequest table
+    sec_req = SecurityApprovalRequest(
+        id=req_uuid,
+        tenant_id=tenant_id,
+        tenant_name=company_name,
+        requester_id=user.id if user else None,
+        requester_name=operator_name,
+        requester_email=user_email,
+        action_type="ledger_purge",
+        target_id=request_code,
+        target_name=f"Movement Ledger ({record_count} Records)",
+        reason=req.reason or "Administrative reset",
+        details={
+            "reference_code": request_code,
+            "record_count": record_count,
+            "otp_verified": True,
+            "otp_verified_at": now_utc.isoformat(),
+        },
+        status="pending",
+        created_at=now_utc,
+    )
+    db.add(sec_req)
 
-    # Store request
-    _ledger_purge_requests.insert(0, purge_request)
+    # Audit Log
+    db.add(AuditLog(
+        actor_id=user.id if user else None,
+        actor_name=operator_name,
+        actor_email=user_email,
+        tenant_id=tenant_id,
+        tenant_name=company_name,
+        action_type="safeguard_request_submitted",
+        target_type="security_queue",
+        target_id=str(req_uuid),
+        description=f"Initiated dual-authorization request: Ledger Purge ({record_count} records) [MFA: Password+OTP Verified]",
+        after_values={"action_type": "ledger_purge", "reference_code": request_code, "reason": req.reason},
+        created_at=now_utc,
+    ))
+
+    await db.commit()
+    await db.refresh(sec_req)
 
     # Notify Super Admin via official Compliance Safeguard email
     superadmin_email = os.getenv("SUPERADMIN_EMAIL", "superadmin@invenza.internal")
@@ -311,32 +340,62 @@ async def request_ledger_purge(
         requester_email=user_email,
         affected_scope=f"{record_count} historical audit transactions",
         reason=req.reason,
-        request_id=request_id,
+        request_id=request_code,
         superadmin_email=superadmin_email,
     )
 
     return {
         "success": True,
-        "request_id": request_id,
+        "request_id": request_code,
+        "uuid": str(req_uuid),
         "status": "pending_super_admin_approval",
         "record_count": record_count,
         "requested_by": operator_name,
-        "requested_at": purge_request["requested_at"],
+        "requested_at": sec_req.created_at.isoformat(),
         "message": (
             f"Dual-authorization safeguard active: Identity verified via Password and Email OTP. "
-            f"Request '{request_id}' has been forwarded to the Super Administrator. "
+            f"Request '{request_code}' has been forwarded to the Super Administrator. "
             f"The Movement Ledger will remain completely untouched until explicit Super Admin approval."
         ),
     }
 
 @router.get("/ledger-purge-requests")
 async def list_ledger_purge_requests(
+    tenant_id: UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_db),
     current_user: Optional[User] = Depends(get_optional_current_user),
 ):
     """
-    Returns all pending and processed Movement Ledger purge requests.
+    Returns all pending and processed Movement Ledger purge requests from PostgreSQL for the active tenant.
     """
-    return _ledger_purge_requests
+    query = select(SecurityApprovalRequest).where(
+        and_(
+            SecurityApprovalRequest.tenant_id == tenant_id,
+            SecurityApprovalRequest.action_type == "ledger_purge",
+        )
+    ).order_by(SecurityApprovalRequest.created_at.desc())
+    res = await db.execute(query)
+    items = res.scalars().all()
+    out = []
+    for it in items:
+        ref_code = (it.details or {}).get("reference_code") or it.target_id or str(it.id)
+        out.append({
+            "id": ref_code,
+            "uuid": str(it.id),
+            "tenant_id": str(it.tenant_id),
+            "company_name": it.tenant_name,
+            "requested_by_name": it.requester_name,
+            "requested_by_email": it.requester_email,
+            "record_count": (it.details or {}).get("record_count", 0),
+            "status": "pending_super_admin_approval" if it.status == "pending" else it.status,
+            "raw_status": it.status,
+            "requested_at": it.created_at.isoformat() if it.created_at else None,
+            "reason": it.reason,
+            "approved_by": it.reviewer_name,
+            "approved_at": it.reviewed_at.isoformat() if it.reviewed_at else None,
+            "rejection_reason": it.rejection_reason,
+        })
+    return out
 
 @router.post("/approve-ledger-purge/{request_id}")
 async def approve_ledger_purge(
@@ -356,25 +415,31 @@ async def approve_ledger_purge(
             detail="Access denied. Only the Super Administrator has authorization to approve Movement Ledger purges.",
         )
 
-    # Find request
-    req_match = next((r for r in _ledger_purge_requests if r["id"] == request_id), None)
-    if not req_match:
+    # Find request by UUID or reference code in target_id
+    if _is_valid_uuid(request_id):
+        res = await db.execute(select(SecurityApprovalRequest).where(
+            or_(SecurityApprovalRequest.id == UUID(request_id), SecurityApprovalRequest.target_id == request_id)
+        ))
+    else:
+        res = await db.execute(select(SecurityApprovalRequest).where(SecurityApprovalRequest.target_id == request_id))
+    sec_req = res.scalar_one_or_none()
+
+    if not sec_req:
         raise HTTPException(status_code=404, detail="Purge authorization request not found.")
 
-    if req_match["status"] != "pending_super_admin_approval":
+    if sec_req.status != "pending":
         raise HTTPException(
             status_code=400,
-            detail=f"Request is not pending approval (current status: {req_match['status']}).",
+            detail=f"Request is not pending approval (current status: {sec_req.status}).",
         )
 
-    target_tenant_id = UUID(req_match["tenant_id"])
+    target_tenant_id = sec_req.tenant_id
     approver_name = (current_user.full_name or current_user.email) if current_user else "Super Administrator"
     approver_email = current_user.email if current_user else "superadmin@invenza.internal"
     approved_at = datetime.utcnow()
 
     # 1. Execute deletion of movements for this tenant
-    del_stmt = delete(StockMovement).where(StockMovement.tenant_id == target_tenant_id)
-    await db.execute(del_stmt)
+    await db.execute(delete(StockMovement).where(StockMovement.tenant_id == target_tenant_id))
 
     # 2. Add an immutable root audit record documenting the authorized purge
     loc_res = await db.execute(
@@ -394,32 +459,48 @@ async def approve_ledger_purge(
             quantity=0.0,
             unit_cost=0.0,
             reference_type="AUDIT_PURGE",
-            reference_id=request_id,
+            reference_id=sec_req.target_id or str(sec_req.id),
             reason_code="ledger purged with super admin approval",
             performed_by=(
-                f"Requested by: {req_match['requested_by_name']} ({req_match['requested_by_email']}) [MFA Verified] | "
+                f"Requested by: {sec_req.requester_name} ({sec_req.requester_email}) [MFA Verified] | "
                 f"Approved & Executed by: {approver_name} ({approver_email})"
             ),
             timestamp=approved_at,
         )
         db.add(root_audit_entry)
 
-    await db.commit()
+    # 3. Update request state
+    sec_req.status = "approved"
+    sec_req.reviewed_by = current_user.id if current_user else None
+    sec_req.reviewer_name = f"{approver_name} ({approver_email})"
+    sec_req.reviewed_at = approved_at
 
-    # Update request state
-    req_match["status"] = "approved_and_executed"
-    req_match["approved_by"] = f"{approver_name} ({approver_email})"
-    req_match["approved_at"] = approved_at.isoformat()
+    # 4. Audit Log
+    db.add(AuditLog(
+        actor_id=current_user.id if current_user else None,
+        actor_name=approver_name,
+        actor_email=approver_email,
+        tenant_id=target_tenant_id,
+        tenant_name=sec_req.tenant_name,
+        action_type="safeguard_approved_ledger_purge",
+        target_type="security_queue",
+        target_id=str(sec_req.id),
+        description=f"Approved and executed: Ledger Purge for {sec_req.tenant_name}",
+        after_values={"status": "approved", "reviewed_by": approver_email},
+        created_at=approved_at,
+    ))
+
+    await db.commit()
+    await db.refresh(sec_req)
 
     return {
         "success": True,
         "request_id": request_id,
-        "status": "approved_and_executed",
-        "approved_by": req_match["approved_by"],
-        "approved_at": req_match["approved_at"],
-        "records_purged": req_match["record_count"],
+        "status": "approved",
+        "approved_by": sec_req.reviewer_name,
+        "approved_at": sec_req.reviewed_at.isoformat(),
         "message": (
-            f"Movement Ledger purge for '{req_match['company_name']}' approved and executed by {approver_name}. "
+            f"Movement Ledger purge for '{sec_req.tenant_name}' approved and executed by {approver_name}. "
             f"Full dual-authorization audit log preserved."
         ),
     }
@@ -429,6 +510,7 @@ async def reject_ledger_purge(
     request_id: str,
     body: RejectPurgeBody,
     current_user: Optional[User] = Depends(get_optional_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
     """
     Allows Super Administrator to reject a pending Movement Ledger purge request.
@@ -440,15 +522,43 @@ async def reject_ledger_purge(
             detail="Access denied. Only Super Administrator can reject purge requests.",
         )
 
-    req_match = next((r for r in _ledger_purge_requests if r["id"] == request_id), None)
-    if not req_match:
+    if _is_valid_uuid(request_id):
+        res = await db.execute(select(SecurityApprovalRequest).where(
+            or_(SecurityApprovalRequest.id == UUID(request_id), SecurityApprovalRequest.target_id == request_id)
+        ))
+    else:
+        res = await db.execute(select(SecurityApprovalRequest).where(SecurityApprovalRequest.target_id == request_id))
+    sec_req = res.scalar_one_or_none()
+
+    if not sec_req:
         raise HTTPException(status_code=404, detail="Purge authorization request not found.")
 
     approver_name = (current_user.full_name or current_user.email) if current_user else "Super Administrator"
-    req_match["status"] = "rejected"
-    req_match["rejection_reason"] = body.reason
-    req_match["approved_by"] = approver_name
-    req_match["approved_at"] = datetime.utcnow().isoformat()
+    approver_email = current_user.email if current_user else "superadmin@invenza.internal"
+    now_utc = datetime.utcnow()
+
+    sec_req.status = "rejected"
+    sec_req.rejection_reason = body.reason
+    sec_req.reviewed_by = current_user.id if current_user else None
+    sec_req.reviewer_name = approver_name
+    sec_req.reviewed_at = now_utc
+
+    db.add(AuditLog(
+        actor_id=current_user.id if current_user else None,
+        actor_name=approver_name,
+        actor_email=approver_email,
+        tenant_id=sec_req.tenant_id,
+        tenant_name=sec_req.tenant_name,
+        action_type="safeguard_rejected_ledger_purge",
+        target_type="security_queue",
+        target_id=str(sec_req.id),
+        description=f"Rejected: Ledger Purge for {sec_req.tenant_name}. Reason: {body.reason}",
+        after_values={"status": "rejected", "rejection_reason": body.reason},
+        created_at=now_utc,
+    ))
+
+    await db.commit()
+    await db.refresh(sec_req)
 
     return {
         "success": True,
@@ -457,3 +567,4 @@ async def reject_ledger_purge(
         "reason": body.reason,
         "message": f"Purge request '{request_id}' has been rejected by {approver_name}.",
     }
+

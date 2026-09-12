@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import {
   IconPackage as Package,
   IconPlus as Plus,
@@ -86,6 +87,7 @@ export const Products: React.FC = () => {
     deleteProducts,
     createAdjustment,
     bulkAdjustStock,
+    taxConfig,
   } = useInventory();
 
   // Search & Filter State
@@ -107,6 +109,93 @@ export const Products: React.FC = () => {
   const [activeMenuProductId, setActiveMenuProductId] = useState<string | null>(null);
   const [detailProduct, setDetailProduct] = useState<Product | null>(null);
   const [copiedField, setCopiedField] = useState<string | null>(null);
+
+  // Floating Portal Tooltip State for Table (Zero flicker, immune to overflow-x-auto & overflow-hidden)
+  const [activeTableTooltip, setActiveTableTooltip] = useState<{
+    id: string;
+    top: number;
+    left: number;
+    placement: 'top' | 'bottom';
+    align: 'left' | 'center';
+    content: React.ReactNode;
+  } | null>(null);
+  const activeTooltipIdRef = useRef<string | null>(null);
+  const tooltipTimeoutRef = useRef<any>(null);
+
+  const handleMouseEnterTarget = useCallback(
+    (
+      e: React.MouseEvent<HTMLElement>,
+      id: string,
+      content: React.ReactNode,
+      preferredAlign: 'left' | 'center' = 'left'
+    ) => {
+      if (tooltipTimeoutRef.current) {
+        clearTimeout(tooltipTimeoutRef.current);
+        tooltipTimeoutRef.current = null;
+      }
+
+      if (activeTooltipIdRef.current === id) {
+        return;
+      }
+
+      const rect = e.currentTarget.getBoundingClientRect();
+      const viewportHeight = window.innerHeight;
+      const viewportWidth = window.innerWidth;
+
+      // Calculate space above vs below target element
+      const spaceBelow = viewportHeight - rect.bottom;
+      const spaceAbove = rect.top;
+      const placeAbove = spaceBelow < 150 && spaceAbove > 140;
+      const placement: 'top' | 'bottom' = placeAbove ? 'top' : 'bottom';
+
+      const top = placeAbove ? rect.top - 8 : rect.bottom + 8;
+      let left = preferredAlign === 'center' ? rect.left + rect.width / 2 : rect.left;
+
+      if (preferredAlign === 'left') {
+        left = Math.max(16, Math.min(left, viewportWidth - 360));
+      } else {
+        left = Math.max(120, Math.min(left, viewportWidth - 120));
+      }
+
+      activeTooltipIdRef.current = id;
+      setActiveTableTooltip({
+        id,
+        top,
+        left,
+        placement,
+        align: preferredAlign,
+        content,
+      });
+    },
+    []
+  );
+
+  const handleMouseLeaveTarget = useCallback(() => {
+    if (tooltipTimeoutRef.current) {
+      clearTimeout(tooltipTimeoutRef.current);
+    }
+    tooltipTimeoutRef.current = setTimeout(() => {
+      activeTooltipIdRef.current = null;
+      setActiveTableTooltip(null);
+    }, 60);
+  }, []);
+
+  // Dismiss tooltip on window scroll or unmount
+  useEffect(() => {
+    const handleDismissTooltip = () => {
+      if (activeTooltipIdRef.current) {
+        activeTooltipIdRef.current = null;
+        setActiveTableTooltip(null);
+      }
+    };
+    window.addEventListener('scroll', handleDismissTooltip, { passive: true });
+    return () => {
+      window.removeEventListener('scroll', handleDismissTooltip);
+      if (tooltipTimeoutRef.current) {
+        clearTimeout(tooltipTimeoutRef.current);
+      }
+    };
+  }, []);
 
   // CSV Import State
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
@@ -149,6 +238,66 @@ export const Products: React.FC = () => {
   const [editHsnCode, setEditHsnCode] = useState('');
   const [editGstRate, setEditGstRate] = useState('18');
   const [editModalError, setEditModalError] = useState<string | null>(null);
+
+  // Dynamic Tax Rate Options based on Org's locked regime (GST, VAT, Sales Tax)
+  const taxRateOptions: DropdownOption[] = useMemo(() => {
+    if (taxConfig.taxType === 'VAT') {
+      const std = taxConfig.standardRate ?? 19;
+      const list: DropdownOption[] = [
+        { value: String(std), label: `${std}% — Standard VAT (${taxConfig.countryName})` },
+        { value: '7', label: '7% — Reduced Rate (Food / Books / Essentials)' },
+        { value: '0', label: '0% — Zero-Rated / Intra-EU B2B Reverse Charge' },
+      ];
+      const currentRate = isEditModalOpen ? editGstRate : newGstRate;
+      if (currentRate && !list.some((o) => o.value === currentRate)) {
+        list.push({ value: currentRate, label: `${currentRate}% — Specific VAT Rate` });
+      }
+      return list;
+    }
+    if (taxConfig.taxType === 'SALES_TAX') {
+      const std = taxConfig.standardRate ?? 0;
+      const list: DropdownOption[] = [];
+      if (std === 0) {
+        list.push({ value: '0', label: `0% — State Sales Tax Exempt (${taxConfig.stateName || 'State'})` });
+      } else {
+        list.push({ value: String(std), label: `${std}% — Standard State Sales Tax (${taxConfig.stateName || 'State'})` });
+        list.push({ value: '0', label: '0% — Tax-Exempt / Wholesale Resale' });
+      }
+      const currentRate = isEditModalOpen ? editGstRate : newGstRate;
+      if (currentRate && !list.some((o) => o.value === currentRate)) {
+        list.push({ value: currentRate, label: `${currentRate}% — Specific Sales Tax Rate` });
+      }
+      return list;
+    }
+    return GST_RATE_OPTIONS;
+  }, [taxConfig, isEditModalOpen, editGstRate, newGstRate]);
+
+  // Keep Add SKU form defaults aligned with Org's locked country/tax settings
+  useEffect(() => {
+    if (taxConfig) {
+      setNewHsnCode(taxConfig.defaultClassificationCode || '8471');
+      setNewGstRate(String(taxConfig.standardRate ?? 18));
+    }
+  }, [taxConfig]);
+
+  const openAddModal = () => {
+    setNewSku('');
+    setNewName('');
+    setNewCategory('Electronics');
+    setNewUom('pcs');
+    setNewCostPrice('25.00');
+    setNewSellPrice('60.00');
+    setNewBarcode('');
+    setNewReorderPoint('15');
+    setNewMaxStock('100');
+    setNewHsnCode(taxConfig.defaultClassificationCode || '8471');
+    setNewGstRate(String(taxConfig.standardRate ?? 18));
+    setNewVariantKey('Color');
+    setNewVariantValue('');
+    setNewCustomFieldsData({});
+    setAddModalError(null);
+    setIsAddModalOpen(true);
+  };
 
   // Bulk Adjustment Form State
   const [bulkDelta, setBulkDelta] = useState<number>(0);
@@ -298,13 +447,20 @@ export const Products: React.FC = () => {
       return;
     }
     if (!newHsnCode || !newHsnCode.trim()) {
-      setAddModalError('HSN/SAC classification code is required for GST compliance.');
+      setAddModalError(`${taxConfig.classificationLabel} is required.`);
       return;
     }
     const rateNum = Number(newGstRate);
-    if (![0, 5, 18, 40].includes(rateNum)) {
-      setAddModalError('GST Rate must be one of the allowed slab values (0%, 5%, 18%, 40%).');
-      return;
+    if (taxConfig.taxType === 'GST') {
+      if (![0, 5, 18, 40].includes(rateNum)) {
+        setAddModalError('GST Rate must be one of the allowed slab values (0%, 5%, 18%, 40%).');
+        return;
+      }
+    } else {
+      if (isNaN(rateNum) || rateNum < 0 || rateNum > 100) {
+        setAddModalError(`Valid ${taxConfig.taxLabel} rate percentage between 0% and 100% is required.`);
+        return;
+      }
     }
 
     const variantAttrs: Record<string, string> = {};
@@ -335,8 +491,8 @@ export const Products: React.FC = () => {
     setNewBarcode('');
     setNewReorderPoint('15');
     setNewMaxStock('100');
-    setNewHsnCode('8471');
-    setNewGstRate('18');
+    setNewHsnCode(taxConfig.defaultClassificationCode || '8471');
+    setNewGstRate(String(taxConfig.standardRate ?? 18));
     setNewVariantValue('');
     setNewCustomFieldsData({});
     setAddModalError(null);
@@ -353,8 +509,8 @@ export const Products: React.FC = () => {
     setEditBarcode(p.barcode || '');
     setEditReorderPoint(String(p.reorderPoint));
     setEditMaxStock(String(p.maxStock !== undefined ? p.maxStock : (p.reorderPoint ? p.reorderPoint * 5 : 100)));
-    setEditHsnCode(p.hsnCode || '');
-    setEditGstRate(String(p.gstRate !== undefined ? p.gstRate : 18));
+    setEditHsnCode(p.hsnCode || taxConfig.defaultClassificationCode || '8471');
+    setEditGstRate(String(p.gstRate !== undefined ? p.gstRate : (taxConfig.standardRate ?? 18)));
     setEditModalError(null);
     setIsEditModalOpen(true);
   };
@@ -369,13 +525,20 @@ export const Products: React.FC = () => {
       return;
     }
     if (!editHsnCode || !editHsnCode.trim()) {
-      setEditModalError('HSN/SAC classification code is required before saving.');
+      setEditModalError(`${taxConfig.classificationLabel} is required before saving.`);
       return;
     }
     const rateNum = Number(editGstRate);
-    if (![0, 5, 18, 40].includes(rateNum)) {
-      setEditModalError('GST Rate must be one of the allowed slab values (0%, 5%, 18%, 40%).');
-      return;
+    if (taxConfig.taxType === 'GST') {
+      if (![0, 5, 18, 40].includes(rateNum)) {
+        setEditModalError('GST Rate must be one of the allowed slab values (0%, 5%, 18%, 40%).');
+        return;
+      }
+    } else {
+      if (isNaN(rateNum) || rateNum < 0 || rateNum > 100) {
+        setEditModalError(`Valid ${taxConfig.taxLabel} rate percentage between 0% and 100% is required.`);
+        return;
+      }
     }
 
     updateProduct(editingProduct.id, {
@@ -422,20 +585,21 @@ export const Products: React.FC = () => {
         ? products.filter((p) => selectedProductIds.includes(p.id))
         : filteredProducts;
 
-    const headers = ['SKU', 'Name', 'Category', 'Unit', 'Cost', 'SellPrice', 'GST_Rate', 'HSN_Code', 'Barcode', 'CurrentStock', 'Reorder_Point', 'Max_Stock'];
+    const headers = ['sku', 'name', 'category', 'tax_code', 'tax_rate', 'available_stock', 'unit_of_measure', 'cost_price', 'sell_price', 'currency', 'reorder_point', 'max_stock', 'barcode'];
     const rows = itemsToExport.map((p) => [
       p.sku,
       `"${p.name.replace(/"/g, '""')}"`,
       p.category,
+      p.taxCode || p.hsnCode || '',
+      p.taxRate !== undefined ? p.taxRate : (p.gstRate !== undefined ? p.gstRate : (taxConfig.standardRate ?? 0)),
+      p.currentStock,
       p.unitOfMeasure,
       p.costPrice,
       p.sellPrice,
-      p.gstRate !== undefined ? `${p.gstRate}%` : '18%',
-      p.hsnCode || '8471',
-      p.barcode,
-      p.currentStock,
+      p.currency || currency,
       p.reorderPoint,
       p.maxStock !== undefined ? p.maxStock : (p.reorderPoint ? p.reorderPoint * 5 : 100),
+      p.barcode,
     ]);
 
     const csvContent =
@@ -451,16 +615,44 @@ export const Products: React.FC = () => {
     document.body.removeChild(link);
   };
 
-  // Download CSV Template with required columns first
+  // Download CSV Template with generic tax_code and tax_rate columns tailored to org
   const handleDownloadTemplate = () => {
-    const csvContent = [
-      'sku,name,category,hsn_code,gst_rate,available_stock,unit_of_measure,cost_price,sell_price,currency,reorder_point,max_stock,barcode,variant_attribute',
-      'SKU-EL-101,"Logitech MX Master 3S Mouse",Electronics,8471,18,15,pcs,6500.00,9999.00,INR,20,100,890786579303,Graphite',
-      'SKU-EL-102,"Dell 24-inch FHD Monitor",Electronics,8528,18,109,pcs,8500.00,12999.00,INR,10,200,890362950628,Black',
-      'SKU-CH-202,"Ergonomic Mesh Office Chair",Furniture,9401,18,20,pcs,9500.00,18999.00,INR,8,50,890142859012,Black',
-      'SKU-CB-303,"Braided USB-C Cable 2M",Accessories,8544,5,150,pcs,350.00,799.00,INR,50,300,890582910394,Silver',
-      'SKU-BK-404,"Enterprise User Manual",Documentation,4901,0,200,pcs,150.00,350.00,INR,50,500,890981234567,Paperback',
-    ].join('\n');
+    let sampleRows: string[];
+
+    if (taxConfig.taxType === 'VAT') {
+      // Germany / EU VAT organization template with Taric and optional tax_code examples
+      sampleRows = [
+        'sku,name,category,tax_code,tax_rate,available_stock,unit_of_measure,cost_price,sell_price,currency,reorder_point,max_stock,barcode,variant_attribute',
+        `SKU-EL-101,"Logitech MX Master 3S Mouse",Electronics,8471.30,${taxConfig.standardRate ?? 19},15,pcs,65.00,99.99,${currency},20,100,4012345678901,Graphite`,
+        `SKU-EL-102,"Dell 24-inch FHD Monitor",Electronics,8528.52,${taxConfig.standardRate ?? 19},109,pcs,85.00,129.99,${currency},10,200,4012345678902,Black`,
+        `SKU-CH-202,"Ergonomic Mesh Office Chair",Furniture,9401.30,${taxConfig.standardRate ?? 19},20,pcs,95.00,189.99,${currency},8,50,4012345678903,Black`,
+        `SKU-BK-404,"Enterprise Technical Manual",Documentation,4901.99,7,200,pcs,15.00,35.00,${currency},50,500,4012345678904,Paperback`,
+        `SKU-CB-303,"Braided USB-C Cable 2M (Optional Code)",Accessories,,${taxConfig.standardRate ?? 19},150,pcs,3.50,7.99,${currency},50,300,4012345678905,Silver`,
+      ];
+    } else if (taxConfig.taxType === 'SALES_TAX') {
+      // US Sales Tax organization template (tax_code is optional/blank, state rate applied)
+      const usRate = taxConfig.isZeroRate ? 0 : (taxConfig.standardRate ?? 7.25);
+      sampleRows = [
+        'sku,name,category,tax_code,tax_rate,available_stock,unit_of_measure,cost_price,sell_price,currency,reorder_point,max_stock,barcode,variant_attribute',
+        `SKU-EL-101,"Logitech MX Master 3S Mouse",Electronics,,${usRate},15,pcs,65.00,99.99,${currency},20,100,012345678901,Graphite`,
+        `SKU-EL-102,"Dell 24-inch FHD Monitor",Electronics,,${usRate},109,pcs,85.00,129.99,${currency},10,200,012345678902,Black`,
+        `SKU-CH-202,"Ergonomic Mesh Office Chair",Furniture,,${usRate},20,pcs,95.00,189.99,${currency},8,50,012345678903,Black`,
+        `SKU-BK-404,"Enterprise Technical Manual (Exempt)",Documentation,,0,200,pcs,15.00,35.00,${currency},50,500,012345678904,Paperback`,
+        `SKU-CB-303,"Braided USB-C Cable 2M",Accessories,,${usRate},150,pcs,3.50,7.99,${currency},50,300,012345678905,Silver`,
+      ];
+    } else {
+      // India GST organization template with HSN/SAC codes and GST slabs (18, 5, 0)
+      sampleRows = [
+        'sku,name,category,tax_code,tax_rate,available_stock,unit_of_measure,cost_price,sell_price,currency,reorder_point,max_stock,barcode,variant_attribute',
+        'SKU-EL-101,"Logitech MX Master 3S Mouse",Electronics,8471,18,15,pcs,6500.00,9999.00,INR,20,100,890786579303,Graphite',
+        'SKU-EL-102,"Dell 24-inch FHD Monitor",Electronics,8528,18,109,pcs,8500.00,12999.00,INR,10,200,890362950628,Black',
+        'SKU-CH-202,"Ergonomic Mesh Office Chair",Furniture,9401,18,20,pcs,9500.00,18999.00,INR,8,50,890142859012,Black',
+        'SKU-CB-303,"Braided USB-C Cable 2M",Accessories,8544,5,150,pcs,350.00,799.00,INR,50,300,890582910394,Silver',
+        'SKU-BK-404,"Enterprise User Manual (Nil-Rated)",Documentation,4901,0,200,pcs,150.00,350.00,INR,50,500,890981234567,Paperback',
+      ];
+    }
+
+    const csvContent = sampleRows.join('\n');
 
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
@@ -506,11 +698,11 @@ export const Products: React.FC = () => {
       h.toLowerCase().replace(/[\s_-]+/g, '')
     );
 
-    const hsnIdx = headers.findIndex((h) =>
-      ['hsncode', 'hsn', 'sac', 'hsnsac', 'hsnsaccode'].includes(h)
+    const taxCodeIdx = headers.findIndex((h) =>
+      ['taxcode', 'taxclassification', 'taxid', 'commoditycode', 'taric', 'hsncode', 'hsn', 'sac', 'hsnsac', 'hsnsaccode'].includes(h)
     );
-    const gstIdx = headers.findIndex((h) =>
-      ['gstrate', 'gst', 'gstpct', 'gstpercentage', 'taxrate'].includes(h)
+    const taxRateIdx = headers.findIndex((h) =>
+      ['taxrate', 'tax', 'taxpct', 'taxpercentage', 'vatrate', 'vat', 'salestax', 'salestaxrate', 'gstrate', 'gst', 'gstpct', 'gstpercentage'].includes(h)
     );
     const skuIdx = headers.findIndex((h) =>
       ['sku', 'skucode', 'itemcode', 'code'].includes(h)
@@ -549,7 +741,6 @@ export const Products: React.FC = () => {
       ['variantattribute', 'variant', 'color', 'size', 'attributes'].includes(h)
     );
 
-    const VALID_GST_SLABS = [0, 5, 18, 40];
     const parsed: any[] = [];
     for (let i = 1; i < lines.length; i++) {
       const cols = parseRow(lines[i]);
@@ -594,21 +785,44 @@ export const Products: React.FC = () => {
       const variant =
         variantIdx !== -1 && cols[variantIdx] ? cols[variantIdx].trim() : '';
 
-      const hsnCode =
-        hsnIdx !== -1 && cols[hsnIdx] ? cols[hsnIdx].trim() : '';
-      const rawGstStr =
-        gstIdx !== -1 && cols[gstIdx] ? cols[gstIdx].replace(/[^0-9.]/g, '') : '';
-      const rawGst = rawGstStr !== '' ? parseFloat(rawGstStr) : NaN;
+      const rawTaxCode =
+        taxCodeIdx !== -1 && cols[taxCodeIdx] ? cols[taxCodeIdx].trim() : '';
+      const rawRateStr =
+        taxRateIdx !== -1 && cols[taxRateIdx] ? cols[taxRateIdx].replace(/[^0-9.]/g, '') : '';
+      const rawRate = rawRateStr !== '' ? parseFloat(rawRateStr) : NaN;
 
-      // Validate required GST classification and allowed slab
+      // Validate required tax classification and rate
       const rowErrors: string[] = [];
       if (!sku) rowErrors.push('Missing SKU');
       if (!name) rowErrors.push('Missing Product Name');
-      if (!hsnCode) rowErrors.push('Missing HSN code');
-      if (isNaN(rawGst)) {
-        rowErrors.push('Missing GST rate');
-      } else if (!VALID_GST_SLABS.includes(rawGst)) {
-        rowErrors.push(`Invalid GST rate (${rawGst}%). Valid slabs: 0%, 5%, 18%, 40%`);
+
+      // tax_code is mandatory ONLY for India-GST organizations
+      if (taxConfig.taxType === 'GST' && !rawTaxCode) {
+        rowErrors.push('Missing HSN / SAC Code (required for Indian GST)');
+      }
+
+      // Default rate if empty, or validate if provided
+      const effectiveRate = isNaN(rawRate)
+        ? (taxConfig.standardRate ?? (taxConfig.taxType === 'GST' ? 18 : 0))
+        : rawRate;
+
+      if (!isNaN(rawRate)) {
+        if (taxConfig.taxType === 'GST') {
+          const VALID_GST_SLABS = [0, 0.25, 3, 5, 12, 18, 28, 40];
+          if (!VALID_GST_SLABS.some((s) => Math.abs(rawRate - s) < 0.001)) {
+            rowErrors.push(`Invalid GST rate (${rawRate}%). Valid slabs: 0%, 5%, 12%, 18%, 28%, 40%`);
+          }
+        } else if (taxConfig.taxType === 'VAT') {
+          if (rawRate < 0 || rawRate > 30) {
+            rowErrors.push(`Invalid VAT rate (${rawRate}%). Valid range: 0% - 30% (Standard: ${taxConfig.standardRate}%)`);
+          }
+        } else if (taxConfig.taxType === 'SALES_TAX') {
+          if (taxConfig.isZeroRate && rawRate > 0) {
+            rowErrors.push(`Invalid Sales Tax rate (${rawRate}%). This region is a statutory 0% tax jurisdiction`);
+          } else if (rawRate < 0 || rawRate > 15) {
+            rowErrors.push(`Invalid Sales Tax rate (${rawRate}%). Valid range: 0% - 15%`);
+          }
+        }
       }
 
       const isValid = rowErrors.length === 0;
@@ -626,8 +840,10 @@ export const Products: React.FC = () => {
         reorderPoint: reorder,
         maxStock: maxStockVal,
         barcode,
-        hsnCode,
-        gstRate: isNaN(rawGst) ? 18 : rawGst,
+        taxCode: rawTaxCode || undefined,
+        hsnCode: rawTaxCode || (taxConfig.taxType === 'GST' ? (taxConfig.defaultClassificationCode || '8471') : ''),
+        taxRate: effectiveRate,
+        gstRate: effectiveRate,
         variantAttributes: variant ? { Variant: variant } : {},
         customFields: {},
         isValid,
@@ -674,8 +890,10 @@ export const Products: React.FC = () => {
         barcode: p.barcode,
         reorderPoint: p.reorderPoint,
         maxStock: p.maxStock,
-        hsnCode: p.hsnCode || '8471',
-        gstRate: p.gstRate !== undefined ? p.gstRate : 18,
+        taxCode: p.taxCode,
+        hsnCode: p.hsnCode || p.taxCode || '',
+        taxRate: p.taxRate !== undefined ? p.taxRate : p.gstRate,
+        gstRate: p.gstRate !== undefined ? p.gstRate : p.taxRate,
         variantAttributes: p.variantAttributes,
         customFields: p.customFields,
       }));
@@ -787,7 +1005,7 @@ export const Products: React.FC = () => {
           {/* Add New SKU Primary Button */}
           <button
             type="button"
-            onClick={() => setIsAddModalOpen(true)}
+            onClick={openAddModal}
             className="flex items-center gap-1.5 rounded-lg bg-teal-600 hover:bg-teal-500 dark:bg-[#5dcaa5] dark:hover:bg-[#4eb995] px-3.5 py-1.5 text-xs font-semibold text-white dark:text-[#04342c] transition-colors shadow-subtle whitespace-nowrap"
           >
             <Plus className="h-3.5 w-3.5" />
@@ -814,7 +1032,7 @@ export const Products: React.FC = () => {
               <button
                 type="button"
                 onClick={() => setSearchQuery('')}
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200 transition-colors cursor-pointer"
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition-colors cursor-pointer"
                 title="Clear search"
               >
                 <X className="h-3 w-3" />
@@ -1000,7 +1218,7 @@ export const Products: React.FC = () => {
                     <span>SKU</span>
                   </div>
                 </th>
-                <th className="py-3.5 px-4 text-left">Product Name & Category</th>
+                <th className="py-3.5 px-4 text-left">Product Name</th>
                 <th className="py-3.5 px-4 w-36 text-center">
                   <div className="w-full flex items-center justify-center">
                     <span>Available Stock</span>
@@ -1016,7 +1234,7 @@ export const Products: React.FC = () => {
                 </th>
                 <th className="py-3.5 px-4 w-36 text-center">
                   <div className="w-full flex items-center justify-center">
-                    <span>GST Rate</span>
+                    <span>{taxConfig.taxLabel} Rate</span>
                   </div>
                 </th>
                 <th className="py-3.5 px-4 w-36 text-center">
@@ -1056,19 +1274,17 @@ export const Products: React.FC = () => {
                     ([_, v]) => Boolean(v && String(v).trim())
                   );
                   const hasVariants = variantEntries.length > 0;
-                  const openDownward = pIdx === 0 && paginatedProducts.length > 1;
-                  const tooltipPlacement = openDownward ? 'top-full mt-1.5' : 'bottom-full mb-1.5';
 
                   return (
                     <tr
                       key={p.id}
-                      className={`relative hover:z-30 transition-colors ${
+                      className={`h-14 transition-colors ${
                         p.isActive === false
                           ? 'bg-slate-100/40 dark:bg-slate-900/60 hover:bg-slate-100/60 dark:hover:bg-slate-900/80'
                           : 'hover:bg-slate-50/80 dark:hover:bg-slate-800/50'
                       } ${isSelected ? 'bg-teal-50/30 dark:bg-teal-950/20' : ''}`}
                     >
-                      <td className="py-3.5 px-4 w-12 text-left">
+                      <td className="py-2.5 px-4 w-12 text-left align-middle">
                         <button
                           onClick={() => handleToggleSelect(p.id)}
                           className="flex items-center"
@@ -1080,107 +1296,127 @@ export const Products: React.FC = () => {
                           )}
                         </button>
                       </td>
-                      <td className="py-3.5 px-4 w-36 text-left">
+                      <td className="py-2.5 px-4 w-36 text-left align-middle">
                         <div
-                          className="relative group/sku hover:z-50 w-full flex flex-col items-start justify-center cursor-pointer"
+                          className="group/sku w-full flex items-center justify-start cursor-pointer min-w-0"
                           onClick={() => setDetailProduct(p)}
+                          onMouseEnter={(e) =>
+                            handleMouseEnterTarget(
+                              e,
+                              `sku-${p.id}`,
+                              <div className="whitespace-nowrap rounded-xl bg-slate-900 dark:bg-slate-950 text-white px-3 py-2 text-[11px] shadow-2xl border border-slate-700 ring-1 ring-white/10 flex flex-col">
+                                <div className="flex items-center gap-1.5 text-teal-300 font-semibold">
+                                  <Warehouse className="h-3.5 w-3.5 text-teal-400" />
+                                  <span>Default Warehouse Location</span>
+                                </div>
+                                <div className="mt-1 text-slate-200 text-[11px]">
+                                  <span className="font-medium text-white">{warehouseName}</span>
+                                  <span className="text-slate-400 font-mono ml-1">({defaultLoc?.code || warehouseIdentifier})</span>
+                                  {defaultLoc?.city ? <span className="text-slate-400"> • {defaultLoc.city}</span> : ''}
+                                </div>
+                              </div>,
+                              'left'
+                            )
+                          }
+                          onMouseLeave={handleMouseLeaveTarget}
                         >
-                          <div className={`flex flex-col items-start ${p.isActive === false ? 'opacity-50' : ''}`}>
-                            <span className="font-mono font-bold text-teal-600 dark:text-teal-400 group-hover/sku:underline whitespace-nowrap truncate max-w-full">
+                          <div className={`flex items-center gap-1.5 min-w-0 ${p.isActive === false ? 'opacity-50' : ''}`}>
+                            <span className="font-mono font-bold text-teal-600 dark:text-teal-400 group-hover/sku:underline whitespace-nowrap truncate">
                               {p.sku}
                             </span>
                             {p.isActive === false && (
-                              <div className="mt-0.5">
-                                <span className="inline-block rounded-md bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20 px-1.5 py-0.5 text-[10px] font-medium tracking-wide">
-                                  Disabled
-                                </span>
-                              </div>
+                              <span className="inline-block rounded-md bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20 px-1.5 py-0.5 text-[9px] font-medium tracking-wide shrink-0">
+                                Disabled
+                              </span>
                             )}
-                          </div>
-
-                          {/* Hover Tooltip revealing default location */}
-                          <div className={`absolute left-0 ${tooltipPlacement} hidden group-hover/sku:flex flex-col z-50 whitespace-nowrap rounded-xl bg-slate-900 dark:bg-slate-950 text-white px-3 py-2 text-[11px] shadow-2xl border border-slate-700 ring-1 ring-white/10 pointer-events-none transition-all`}>
-                            <div className="flex items-center gap-1.5 text-teal-300 font-semibold">
-                              <Warehouse className="h-3.5 w-3.5 text-teal-400" />
-                              <span>Default Warehouse Location</span>
-                            </div>
-                            <div className="mt-1 text-slate-200 text-[11px]">
-                              <span className="font-medium text-white">{warehouseName}</span>
-                              <span className="text-slate-400 font-mono ml-1">({defaultLoc?.code || warehouseIdentifier})</span>
-                              {defaultLoc?.city ? <span className="text-slate-400"> • {defaultLoc.city}</span> : ''}
-                            </div>
                           </div>
                         </div>
                       </td>
                       <td
-                        className="py-3.5 px-4 text-left cursor-pointer"
+                        className="py-2.5 px-4 text-left cursor-pointer align-middle min-w-0 overflow-hidden"
                         onClick={() => setDetailProduct(p)}
                       >
-                        <div className="group/name relative hover:z-50 inline-flex flex-col max-w-full">
-                          <div className={`flex flex-col max-w-full ${p.isActive === false ? 'opacity-50' : ''}`}>
-                            <div className="font-semibold text-slate-800 dark:text-slate-200 group-hover/name:text-teal-600 dark:group-hover/name:text-teal-400 transition-colors truncate">
-                              {p.name}
-                            </div>
-                            <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
-                              <span className="inline-block rounded-md bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 text-[10px] text-slate-500 dark:text-slate-400 max-w-[160px] truncate">
-                                {p.category}
-                              </span>
-                              {hasVariants && (
-                                <div className="inline-flex flex-wrap items-center gap-1">
-                                  {variantEntries.map(([attrKey, attrVal]) => (
-                                    <span
-                                      key={attrKey}
-                                      title={`${attrKey}: ${attrVal}`}
-                                      className="inline-flex items-center rounded-md bg-teal-50 dark:bg-teal-950/50 text-teal-700 dark:text-teal-300 border border-teal-200/70 dark:border-teal-800/60 px-1.5 py-0.5 text-[9px] font-semibold max-w-[120px] truncate"
-                                    >
-                                      {attrVal}
-                                    </span>
-                                  ))}
+                        <div
+                          className="group/name w-full flex items-center min-w-0"
+                          onMouseEnter={(e) =>
+                            handleMouseEnterTarget(
+                              e,
+                              `name-${p.id}`,
+                              <div className="min-w-[200px] max-w-sm rounded-xl bg-slate-900 dark:bg-slate-950 text-white p-3 text-xs shadow-2xl border border-slate-700 ring-1 ring-white/10 flex flex-col gap-2">
+                                {/* 1. Product name */}
+                                <div className="font-semibold text-white text-xs leading-snug">
+                                  {p.name}
                                 </div>
-                              )}
-                            </div>
-                          </div>
 
-                          {/* Hover Tooltip: 1. Product Name, 2. | Variant : ... |, 3. | Category : ... | */}
-                          <div className={`absolute left-0 ${tooltipPlacement} hidden group-hover/name:flex flex-col z-50 min-w-[200px] max-w-sm rounded-xl bg-slate-900 dark:bg-slate-950 text-white p-3 text-xs shadow-2xl border border-slate-700 ring-1 ring-white/10 pointer-events-none transition-all gap-1.5`}>
-                            {/* 1. Product name */}
-                            <div className="font-semibold text-white text-xs leading-snug">
-                              {p.name}
-                            </div>
-
-                            {/* Badges for Variant and Category */}
-                            <div className="flex flex-wrap items-center gap-1.5 pt-1.5 border-t border-slate-800/80">
-                              {/* 2. | Variant : ... | */}
-                              {hasVariants ? (
-                                variantEntries.map(([attrKey, attrVal]) => (
-                                  <span
-                                    key={attrKey}
-                                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-teal-950/80 text-teal-300 border border-teal-700/60 font-mono text-[10px]"
-                                  >
-                                    <span className="text-teal-400 font-medium">
-                                      {attrKey.toLowerCase() === 'variant' ? 'Variant' : attrKey} :
-                                    </span>
-                                    <span className="font-bold text-white">{attrVal}</span>
+                                {/* Badges for Category and Variant */}
+                                <div className="flex flex-wrap items-center gap-1.5 pt-2 border-t border-slate-800/80">
+                                  {/* Category Badge */}
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-800 text-slate-300 border border-slate-700 font-mono text-[10px]">
+                                    <span className="text-slate-400 font-medium">Category:</span>
+                                    <span className="font-semibold text-white">{p.category}</span>
                                   </span>
-                                ))
-                              ) : (
-                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-800/90 text-slate-300 border border-slate-700 font-mono text-[10px]">
-                                  <span className="text-slate-400 font-medium">Variant :</span>
-                                  <span className="text-slate-400 italic">None</span>
-                                </span>
-                              )}
 
-                              {/* 3. | Category : ... | */}
-                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-800/90 text-slate-300 border border-slate-700 font-mono text-[10px]">
-                                <span className="text-slate-400 font-medium">Category :</span>
-                                <span className="font-semibold text-white">{p.category}</span>
-                              </span>
-                            </div>
-                          </div>
+                                  {/* Variant Badges */}
+                                  {hasVariants ? (
+                                    variantEntries.map(([attrKey, attrVal]) => (
+                                      <span
+                                        key={attrKey}
+                                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-teal-950/80 text-teal-300 border border-teal-700/60 font-mono text-[10px]"
+                                      >
+                                        <span className="text-teal-400 font-medium">
+                                          {attrKey.toLowerCase() === 'variant' ? 'Variant' : attrKey}:
+                                        </span>
+                                        <span className="font-bold text-white">{attrVal}</span>
+                                      </span>
+                                    ))
+                                  ) : (
+                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-800 text-slate-300 border border-slate-700 font-mono text-[10px]">
+                                      <span className="text-slate-400 font-medium">Variant:</span>
+                                      <span className="text-slate-400 italic">None</span>
+                                    </span>
+                                  )}
+                                </div>
+                              </div>,
+                              'left'
+                            )
+                          }
+                          onMouseLeave={handleMouseLeaveTarget}
+                        >
+                          <span
+                            className={`font-semibold text-slate-800 dark:text-slate-200 group-hover/name:text-teal-600 dark:group-hover/name:text-teal-400 transition-colors truncate block max-w-full ${
+                              p.isActive === false ? 'opacity-50' : ''
+                            }`}
+                          >
+                            {p.name}
+                          </span>
                         </div>
                       </td>
-                      <td className="py-3.5 px-4 w-36 text-center font-mono tabular-nums">
-                        <div className="group/stock relative hover:z-50 w-full flex items-center justify-center cursor-default">
+                      <td className="py-2.5 px-4 w-36 text-center font-mono tabular-nums align-middle">
+                        <div
+                          className="w-full flex items-center justify-center cursor-default"
+                          onMouseEnter={(e) =>
+                            handleMouseEnterTarget(
+                              e,
+                              `stock-${p.id}`,
+                              <div className="whitespace-nowrap rounded-lg bg-slate-900 dark:bg-slate-950 text-white px-2.5 py-1.5 text-[10px] shadow-2xl border border-slate-700 ring-1 ring-white/10 flex flex-col gap-0.5">
+                                <div className="flex items-center gap-1 text-teal-300 font-semibold pb-0.5 border-b border-slate-800/80">
+                                  <Package className="h-3 w-3 text-teal-400" />
+                                  <span>Stock Thresholds</span>
+                                </div>
+                                <div className="flex items-center justify-between gap-3 text-slate-300 pt-0.5">
+                                  <span className="text-slate-400">Min Order:</span>
+                                  <strong className="font-mono text-amber-400">{p.reorderPoint} {p.unitOfMeasure}</strong>
+                                </div>
+                                <div className="flex items-center justify-between gap-3 text-slate-300">
+                                  <span className="text-slate-400">Max Order:</span>
+                                  <strong className="font-mono text-emerald-400">{maxStockVal} {p.unitOfMeasure}</strong>
+                                </div>
+                              </div>,
+                              'center'
+                            )
+                          }
+                          onMouseLeave={handleMouseLeaveTarget}
+                        >
                           <div className={`inline-flex items-center gap-1.5 ${p.isActive === false ? 'opacity-50' : ''}`}>
                             {isOutOfStock ? (
                               <span className="flex h-2 w-2 rounded-full bg-rose-500 shrink-0" title="Out of stock (0)" />
@@ -1204,69 +1440,69 @@ export const Products: React.FC = () => {
                               {p.unitOfMeasure}
                             </span>
                           </div>
-
-                          {/* Hover Tooltip revealing Min and Max stock thresholds */}
-                          <div className={`absolute left-1/2 -translate-x-1/2 ${tooltipPlacement} hidden group-hover/stock:flex flex-col z-50 whitespace-nowrap rounded-lg bg-slate-900 dark:bg-slate-950 text-white px-2.5 py-1.5 text-[10px] shadow-2xl border border-slate-700 ring-1 ring-white/10 pointer-events-none transition-all gap-0.5`}>
-                            <div className="flex items-center gap-1 text-teal-300 font-semibold pb-0.5 border-b border-slate-800/80">
-                              <Package className="h-3 w-3 text-teal-400" />
-                              <span>Stock Thresholds</span>
-                            </div>
-                            <div className="flex items-center justify-between gap-3 text-slate-300 pt-0.5">
-                              <span className="text-slate-400">Min Order:</span>
-                              <strong className="font-mono text-amber-400">{p.reorderPoint} {p.unitOfMeasure}</strong>
-                            </div>
-                            <div className="flex items-center justify-between gap-3 text-slate-300">
-                              <span className="text-slate-400">Max Order:</span>
-                              <strong className="font-mono text-emerald-400">{maxStockVal} {p.unitOfMeasure}</strong>
-                            </div>
-                          </div>
                         </div>
                       </td>
-                      <td className="py-3.5 px-4 w-36 text-center font-mono tabular-nums">
-                        <div className="group/price relative hover:z-50 w-full flex items-center justify-center cursor-default">
+                      <td className="py-2.5 px-4 w-36 text-center font-mono tabular-nums align-middle">
+                        <div
+                          className="w-full flex items-center justify-center cursor-default"
+                          onMouseEnter={(e) =>
+                            handleMouseEnterTarget(
+                              e,
+                              `price-${p.id}`,
+                              <div className="whitespace-nowrap rounded-xl bg-slate-900 dark:bg-slate-950 text-white px-3 py-2 text-[11px] shadow-2xl border border-slate-700 ring-1 ring-white/10 flex flex-col">
+                                <div className="flex items-center justify-between gap-3">
+                                  <span className="text-slate-400">Gross Margin:</span>
+                                  <span
+                                    className={`font-mono font-bold ${
+                                      margin > 40
+                                        ? 'text-emerald-400'
+                                        : margin > 20
+                                        ? 'text-teal-300'
+                                        : 'text-amber-400'
+                                    }`}
+                                  >
+                                    {margin}%
+                                  </span>
+                                </div>
+                                <div className="text-[10px] text-slate-300 mt-0.5">
+                                  Cost Price: <span className="font-mono font-semibold text-slate-200">{formatCurrency(p.costPrice, p.currency || currency)}</span>
+                                </div>
+                                <div className="text-[10px] text-slate-300 mt-0.5">
+                                  Unit Spread: <span className="font-mono font-semibold text-emerald-400">+{formatCurrency(p.sellPrice - p.costPrice, p.currency || currency)}</span>
+                                </div>
+                              </div>,
+                              'center'
+                            )
+                          }
+                          onMouseLeave={handleMouseLeaveTarget}
+                        >
                           <span className={`font-bold tabular-nums text-slate-900 dark:text-white ${p.isActive === false ? 'opacity-50' : ''}`}>
                             {formatCurrency(p.sellPrice, p.currency || currency)}
                           </span>
-
-                          {/* Hover Tooltip revealing Cost Price, Margin % & Profit */}
-                          <div className={`absolute left-1/2 -translate-x-1/2 ${tooltipPlacement} hidden group-hover/price:flex flex-col z-50 whitespace-nowrap rounded-xl bg-slate-900 dark:bg-slate-950 text-white px-3 py-2 text-[11px] shadow-2xl border border-slate-700 ring-1 ring-white/10 pointer-events-none transition-all`}>
-                            <div className="flex items-center justify-between gap-3">
-                              <span className="text-slate-400">Gross Margin:</span>
-                              <span
-                                className={`font-mono font-bold ${
-                                  margin > 40
-                                    ? 'text-emerald-400'
-                                    : margin > 20
-                                    ? 'text-teal-300'
-                                    : 'text-amber-400'
-                                }`}
-                              >
-                                {margin}%
-                              </span>
-                            </div>
-                            <div className="text-[10px] text-slate-300 mt-0.5">
-                              Cost Price: <span className="font-mono font-semibold text-slate-200">{formatCurrency(p.costPrice, p.currency || currency)}</span>
-                            </div>
-                            <div className="text-[10px] text-slate-300 mt-0.5">
-                              Unit Spread: <span className="font-mono font-semibold text-emerald-400">+{formatCurrency(p.sellPrice - p.costPrice, p.currency || currency)}</span>
-                            </div>
-                          </div>
                         </div>
                       </td>
-                      <td className="py-3.5 px-4 w-36 text-center font-mono tabular-nums">
-                        <div className="group/gst relative hover:z-50 w-full flex items-center justify-center cursor-default">
+                      <td className="py-2.5 px-4 w-36 text-center font-mono tabular-nums align-middle">
+                        <div
+                          className="w-full flex items-center justify-center cursor-default"
+                          onMouseEnter={(e) =>
+                            handleMouseEnterTarget(
+                              e,
+                              `gst-${p.id}`,
+                              <div className="whitespace-nowrap rounded-lg bg-slate-900 dark:bg-slate-950 text-white px-2.5 py-1.5 text-[11px] shadow-2xl border border-slate-700 ring-1 ring-white/10 flex flex-col">
+                                <div className="font-medium text-teal-300">{taxConfig.classificationLabel}: <span className="text-white font-mono font-bold">{p.hsnCode || 'N/A'}</span></div>
+                                <div className="text-[10px] text-slate-300">{taxConfig.taxLabel} Rate: {p.gstRate !== undefined ? `${p.gstRate}%` : `${taxConfig.standardRate}%`}</div>
+                              </div>,
+                              'center'
+                            )
+                          }
+                          onMouseLeave={handleMouseLeaveTarget}
+                        >
                           <span className={`font-mono font-bold tabular-nums text-slate-800 dark:text-slate-200 ${p.isActive === false ? 'opacity-50' : ''}`}>
-                            {p.gstRate !== undefined ? `${p.gstRate}%` : '18%'}
+                            {p.gstRate !== undefined ? `${p.gstRate}%` : `${taxConfig.standardRate}%`}
                           </span>
-
-                          {/* Hover Tooltip revealing HSN code & slab */}
-                          <div className={`absolute left-1/2 -translate-x-1/2 ${tooltipPlacement} hidden group-hover/gst:flex flex-col z-50 whitespace-nowrap rounded-lg bg-slate-900 dark:bg-slate-950 text-white px-2.5 py-1.5 text-[11px] shadow-2xl border border-slate-700 ring-1 ring-white/10 pointer-events-none transition-all`}>
-                            <div className="font-medium text-teal-300">HSN Code: <span className="text-white font-mono font-bold">{p.hsnCode || 'N/A'}</span></div>
-                            <div className="text-[10px] text-slate-300">GST Slab: {p.gstRate !== undefined ? `${p.gstRate}%` : '18%'}</div>
-                          </div>
                         </div>
                       </td>
-                      <td className="py-3.5 px-4 w-36 text-center">
+                      <td className="py-2.5 px-4 w-36 text-center align-middle">
                         <div className={`w-full flex items-center justify-center gap-1.5 ${p.isActive === false ? 'opacity-60' : ''}`}>
                           {/* Edit Button */}
                           <button
@@ -1572,38 +1808,38 @@ export const Products: React.FC = () => {
             </div>
           </div>
 
-          {/* GST Classification Section */}
+          {/* Dynamic Tax Classification Section */}
           <div className="rounded-xl border border-teal-500/20 bg-teal-500/10 p-3.5 space-y-2.5">
             <div className="flex items-center gap-1.5 text-xs font-bold text-teal-800 dark:text-teal-300">
               <Tag className="h-3.5 w-3.5" />
-              GST 2.0 Statutory Classification
+              {taxConfig.sectionTitle}
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  HSN / SAC Code *
+                  {taxConfig.classificationLabel} *
                 </label>
                 <input
                   type="text"
                   required
                   value={newHsnCode}
                   onChange={(e) => setNewHsnCode(e.target.value.trim())}
-                  placeholder="e.g. 8471"
+                  placeholder={taxConfig.classificationPlaceholder}
                   className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-xs font-mono focus:border-teal-500 focus:ring-1 focus:ring-teal-500 focus:outline-none"
                 />
-                <span className="text-[10px] text-slate-400 mt-0.5 block">Harmonized System Nomenclature code printed on invoices</span>
+                <span className="text-[10px] text-slate-400 mt-0.5 block">{taxConfig.classificationHelper}</span>
               </div>
               <div>
                 <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  GST Rate Slab *
+                  {taxConfig.rateFieldLabel} *
                 </label>
                 <SimpleSelectDropdown
-                  options={GST_RATE_OPTIONS}
+                  options={taxRateOptions}
                   value={newGstRate}
                   onChange={setNewGstRate}
                   buttonClassName="font-mono font-bold text-teal-700 dark:text-teal-300"
                 />
-                <span className="text-[10px] text-slate-400 mt-0.5 block">Valid GST 2.0 standard rates</span>
+                <span className="text-[10px] text-slate-400 mt-0.5 block">{taxConfig.rateHelper}</span>
               </div>
             </div>
           </div>
@@ -1678,7 +1914,7 @@ export const Products: React.FC = () => {
           setEditingProduct(null);
         }}
         title="Edit SKU & Tax Classification"
-        subtitle="Update product pricing, inventory thresholds, and GST 2.0 classification"
+        subtitle={`Update product pricing, inventory thresholds, and ${taxConfig.sectionTitle}`}
         maxWidth="2xl"
       >
         <form onSubmit={handleUpdateProduct} className="space-y-4">
@@ -1799,38 +2035,38 @@ export const Products: React.FC = () => {
             </div>
           </div>
 
-          {/* GST Classification Section */}
+          {/* Dynamic Tax Classification Section */}
           <div className="rounded-xl border border-teal-500/20 bg-teal-500/10 p-3.5 space-y-2.5">
             <div className="flex items-center gap-1.5 text-xs font-bold text-teal-800 dark:text-teal-300">
               <Tag className="h-3.5 w-3.5" />
-              GST 2.0 Statutory Classification
+              {taxConfig.sectionTitle}
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  HSN / SAC Code *
+                  {taxConfig.classificationLabel} *
                 </label>
                 <input
                   type="text"
                   required
                   value={editHsnCode}
                   onChange={(e) => setEditHsnCode(e.target.value.trim())}
-                  placeholder="e.g. 8471"
+                  placeholder={taxConfig.classificationPlaceholder}
                   className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-xs font-mono focus:border-teal-500 focus:ring-1 focus:ring-teal-500 focus:outline-none"
                 />
-                <span className="text-[10px] text-slate-400 mt-0.5 block">Harmonized System Nomenclature classification code</span>
+                <span className="text-[10px] text-slate-400 mt-0.5 block">{taxConfig.classificationHelper}</span>
               </div>
               <div>
                 <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  GST Rate Slab *
+                  {taxConfig.rateFieldLabel} *
                 </label>
                 <SimpleSelectDropdown
-                  options={GST_RATE_OPTIONS}
+                  options={taxRateOptions}
                   value={editGstRate}
                   onChange={setEditGstRate}
                   buttonClassName="font-mono font-bold text-teal-700 dark:text-teal-300"
                 />
-                <span className="text-[10px] text-slate-400 mt-0.5 block">Valid GST 2.0 standard rates</span>
+                <span className="text-[10px] text-slate-400 mt-0.5 block">{taxConfig.rateHelper}</span>
               </div>
             </div>
           </div>
@@ -1992,7 +2228,7 @@ export const Products: React.FC = () => {
                   Pre-formatted CSV Template
                 </span>
                 <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
-                  Required columns: <code className="text-indigo-600 dark:text-indigo-400 font-mono font-bold">sku</code> and <code className="text-indigo-600 dark:text-indigo-400 font-mono font-bold">name</code>. Optional: <span className="font-semibold text-indigo-500 dark:text-indigo-400">available_stock</span>, <span className="font-semibold text-indigo-500 dark:text-indigo-400">currency</span> (INR), category, unit, cost, price, barcode.
+                  Required columns: <code className="text-indigo-600 dark:text-indigo-400 font-mono font-bold">sku</code> and <code className="text-indigo-600 dark:text-indigo-400 font-mono font-bold">name</code>. Tax columns: <code className="text-indigo-600 dark:text-indigo-400 font-mono font-bold">tax_code</code> ({taxConfig.taxType === 'GST' ? 'required for GST' : 'optional'}), <code className="text-indigo-600 dark:text-indigo-400 font-mono font-bold">tax_rate</code> ({taxConfig.taxLabel} %). Optional: available_stock, currency, category, unit, cost, price, barcode.
                 </p>
               </div>
             </div>
@@ -2091,7 +2327,7 @@ export const Products: React.FC = () => {
                 {invalidParsedProducts.length > 0 && (
                   <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-rose-500/10 text-rose-600 dark:text-rose-400 text-xs font-bold">
                     <AlertCircle className="h-3.5 w-3.5" />
-                    {invalidParsedProducts.length} Rejected (Missing HSN or Invalid GST Rate)
+                    {invalidParsedProducts.length} Rejected (Invalid SKU, Missing Tax Code, or Invalid Rate)
                   </span>
                 )}
               </div>
@@ -2104,8 +2340,8 @@ export const Products: React.FC = () => {
                       <th className="px-3 py-2">Status</th>
                       <th className="px-3 py-2">SKU</th>
                       <th className="px-3 py-2">Product Name</th>
-                      <th className="px-3 py-2">HSN Code</th>
-                      <th className="px-3 py-2 text-right">GST Rate</th>
+                      <th className="px-3 py-2">{taxConfig.taxType === 'GST' ? 'HSN / SAC Code' : 'Tax Code'}</th>
+                      <th className="px-3 py-2 text-right">{taxConfig.taxLabel} Rate</th>
                       <th className="px-3 py-2 text-right">Stock</th>
                       <th className="px-3 py-2 text-right">Max Stock</th>
                       <th className="px-3 py-2 text-center">Cur</th>
@@ -2138,12 +2374,12 @@ export const Products: React.FC = () => {
                           {p.name || <em className="text-rose-400 font-sans font-normal">empty</em>}
                         </td>
                         <td className="px-3 py-2 font-mono text-xs text-slate-600 dark:text-slate-400">
-                          {p.hsnCode || <span className="text-rose-500 font-bold">Missing</span>}
+                          {p.taxCode || p.hsnCode || (taxConfig.taxType === 'GST' ? <span className="text-rose-500 font-bold">Missing</span> : <span className="text-slate-400 italic">None</span>)}
                         </td>
                         <td className="px-3 py-2 text-right font-mono font-bold text-slate-700 dark:text-slate-300">
-                          {p.gstRate !== undefined && !isNaN(p.gstRate) ? (
-                            <span className={[0, 5, 18, 40].includes(p.gstRate) ? 'text-indigo-600 dark:text-indigo-400' : 'text-rose-500'}>
-                              {p.gstRate}%
+                          {p.taxRate !== undefined && !isNaN(p.taxRate) ? (
+                            <span className="text-indigo-600 dark:text-indigo-400">
+                              {p.taxRate}%
                             </span>
                           ) : (
                             <span className="text-rose-500">Invalid</span>
@@ -2302,68 +2538,194 @@ export const Products: React.FC = () => {
               </div>
             </div>
 
-            {/* GST 2.0 Statutory Tax Classification Section */}
-            <div className="rounded-xl border border-slate-200 dark:border-slate-800 p-3.5 bg-slate-50/50 dark:bg-slate-800/30 space-y-2.5">
-              <div className="flex items-center justify-between">
-                <h4 className="font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
-                  <span className="flex h-2 w-2 rounded-full bg-teal-500" />
-                  GST 2.0 Statutory Tax Classification
-                </h4>
-                <span className="text-[10px] px-2 py-0.5 rounded bg-teal-500/10 text-teal-700 dark:text-teal-300 font-mono font-semibold">
-                  HSN: {detailProduct.hsnCode || 'N/A'} • Slab: {detailProduct.gstRate !== undefined ? `${detailProduct.gstRate}%` : '18%'}
-                </span>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
-                <div className="rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/70 p-2.5 space-y-1.5 font-mono text-[11px]">
-                  <div className="font-sans font-bold text-slate-700 dark:text-slate-300 text-xs flex items-center gap-1">
-                    <span>Intra-State Supply (Same State)</span>
-                    <span className="text-[9px] px-1.5 py-0.2 rounded bg-slate-100 dark:bg-slate-800 text-slate-500">CGST + SGST</span>
-                  </div>
-                  <div className="flex justify-between text-slate-500">
-                    <span>CGST ({(Number(detailProduct.gstRate !== undefined ? detailProduct.gstRate : 18) / 2).toFixed(1)}%):</span>
-                    <span className="font-semibold text-slate-800 dark:text-slate-200">
-                      {formatCurrency(detailProduct.sellPrice * (Number(detailProduct.gstRate !== undefined ? detailProduct.gstRate : 18) / 200), detailProduct.currency || currency)}
-                    </span>
-                  </div>
-                  <div className="flex justify-between text-slate-500">
-                    <span>SGST ({(Number(detailProduct.gstRate !== undefined ? detailProduct.gstRate : 18) / 2).toFixed(1)}%):</span>
-                    <span className="font-semibold text-slate-800 dark:text-slate-200">
-                      {formatCurrency(detailProduct.sellPrice * (Number(detailProduct.gstRate !== undefined ? detailProduct.gstRate : 18) / 200), detailProduct.currency || currency)}
-                    </span>
-                  </div>
-                  <div className="border-t border-slate-100 dark:border-slate-800 pt-1 flex justify-between font-bold text-slate-800 dark:text-slate-200">
-                    <span>Total Incl. GST:</span>
-                    <span className="text-teal-600 dark:text-teal-400">
-                      {formatCurrency(detailProduct.sellPrice * (1 + Number(detailProduct.gstRate !== undefined ? detailProduct.gstRate : 18) / 100), detailProduct.currency || currency)}
-                    </span>
-                  </div>
+            {/* Dynamic Statutory Tax Classification Section */}
+            {taxConfig.taxType === 'VAT' ? (
+              <div className="rounded-xl border border-slate-200 dark:border-slate-800 p-3.5 bg-slate-50/50 dark:bg-slate-800/30 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <h4 className="font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
+                    <span className="flex h-2 w-2 rounded-full bg-teal-500" />
+                    {taxConfig.sectionTitle}
+                  </h4>
+                  <span className="text-[10px] px-2 py-0.5 rounded bg-teal-500/10 text-teal-700 dark:text-teal-300 font-mono font-semibold">
+                    {taxConfig.classificationLabel}: {detailProduct.hsnCode || 'N/A'} • Rate: {detailProduct.gstRate !== undefined ? `${detailProduct.gstRate}%` : `${taxConfig.standardRate}%`}
+                  </span>
                 </div>
 
-                <div className="rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/70 p-2.5 space-y-1.5 font-mono text-[11px]">
-                  <div className="font-sans font-bold text-slate-700 dark:text-slate-300 text-xs flex items-center gap-1">
-                    <span>Inter-State Supply (Out of State)</span>
-                    <span className="text-[9px] px-1.5 py-0.2 rounded bg-slate-100 dark:bg-slate-800 text-slate-500">IGST Only</span>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
+                  <div className="rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/70 p-2.5 space-y-1.5 font-mono text-[11px]">
+                    <div className="font-sans font-bold text-slate-700 dark:text-slate-300 text-xs flex items-center gap-1">
+                      <span>Domestic Supply ({taxConfig.countryName})</span>
+                      <span className="text-[9px] px-1.5 py-0.2 rounded bg-slate-100 dark:bg-slate-800 text-slate-500">Standard VAT</span>
+                    </div>
+                    <div className="flex justify-between text-slate-500">
+                      <span>Standard VAT ({Number(detailProduct.gstRate !== undefined ? detailProduct.gstRate : taxConfig.standardRate)}%):</span>
+                      <span className="font-semibold text-slate-800 dark:text-slate-200">
+                        {formatCurrency(detailProduct.sellPrice * (Number(detailProduct.gstRate !== undefined ? detailProduct.gstRate : taxConfig.standardRate) / 100), detailProduct.currency || currency)}
+                      </span>
+                    </div>
+                    <div className="flex justify-between text-slate-500">
+                      <span>Net Selling Price:</span>
+                      <span className="font-semibold text-slate-800 dark:text-slate-200">
+                        {formatCurrency(detailProduct.sellPrice, detailProduct.currency || currency)}
+                      </span>
+                    </div>
+                    <div className="border-t border-slate-100 dark:border-slate-800 pt-1 flex justify-between font-bold text-slate-800 dark:text-slate-200">
+                      <span>Total Incl. VAT:</span>
+                      <span className="text-teal-600 dark:text-teal-400">
+                        {formatCurrency(detailProduct.sellPrice * (1 + Number(detailProduct.gstRate !== undefined ? detailProduct.gstRate : taxConfig.standardRate) / 100), detailProduct.currency || currency)}
+                      </span>
+                    </div>
                   </div>
-                  <div className="flex justify-between text-slate-500">
-                    <span>IGST ({Number(detailProduct.gstRate !== undefined ? detailProduct.gstRate : 18)}%):</span>
-                    <span className="font-semibold text-slate-800 dark:text-slate-200">
-                      {formatCurrency(detailProduct.sellPrice * (Number(detailProduct.gstRate !== undefined ? detailProduct.gstRate : 18) / 100), detailProduct.currency || currency)}
-                    </span>
-                  </div>
-                  <div className="flex justify-between text-slate-500">
-                    <span>Place of Supply Rule:</span>
-                    <span className="text-slate-700 dark:text-slate-300 font-sans text-[10px]">Shipping Destination State</span>
-                  </div>
-                  <div className="border-t border-slate-100 dark:border-slate-800 pt-1 flex justify-between font-bold text-slate-800 dark:text-slate-200">
-                    <span>Total Incl. GST:</span>
-                    <span className="text-teal-600 dark:text-teal-400">
-                      {formatCurrency(detailProduct.sellPrice * (1 + Number(detailProduct.gstRate !== undefined ? detailProduct.gstRate : 18) / 100), detailProduct.currency || currency)}
-                    </span>
+
+                  <div className="rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/70 p-2.5 space-y-1.5 font-mono text-[11px]">
+                    <div className="font-sans font-bold text-slate-700 dark:text-slate-300 text-xs flex items-center gap-1">
+                      <span>Intra-EU B2B / Export Supply</span>
+                      <span className="text-[9px] px-1.5 py-0.2 rounded bg-slate-100 dark:bg-slate-800 text-slate-500">Reverse Charge</span>
+                    </div>
+                    <div className="flex justify-between text-slate-500">
+                      <span>Intra-Community VAT (0%):</span>
+                      <span className="font-semibold text-slate-800 dark:text-slate-200">
+                        {formatCurrency(0, detailProduct.currency || currency)}
+                      </span>
+                    </div>
+                    <div className="flex justify-between text-slate-500">
+                      <span>Applicable Mechanism:</span>
+                      <span className="text-slate-700 dark:text-slate-300 font-sans text-[10px]">EU Reverse Charge / Zero-Rated</span>
+                    </div>
+                    <div className="border-t border-slate-100 dark:border-slate-800 pt-1 flex justify-between font-bold text-slate-800 dark:text-slate-200">
+                      <span>Total Net Supply:</span>
+                      <span className="text-teal-600 dark:text-teal-400">
+                        {formatCurrency(detailProduct.sellPrice, detailProduct.currency || currency)}
+                      </span>
+                    </div>
                   </div>
                 </div>
               </div>
-            </div>
+            ) : taxConfig.taxType === 'SALES_TAX' ? (
+              <div className="rounded-xl border border-slate-200 dark:border-slate-800 p-3.5 bg-slate-50/50 dark:bg-slate-800/30 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <h4 className="font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
+                    <span className="flex h-2 w-2 rounded-full bg-teal-500" />
+                    {taxConfig.sectionTitle}
+                  </h4>
+                  <span className="text-[10px] px-2 py-0.5 rounded bg-teal-500/10 text-teal-700 dark:text-teal-300 font-mono font-semibold">
+                    {taxConfig.classificationLabel}: {detailProduct.hsnCode || 'N/A'} • Rate: {detailProduct.gstRate !== undefined ? `${detailProduct.gstRate}%` : `${taxConfig.standardRate}%`}
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
+                  <div className="rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/70 p-2.5 space-y-1.5 font-mono text-[11px]">
+                    <div className="font-sans font-bold text-slate-700 dark:text-slate-300 text-xs flex items-center gap-1">
+                      <span>In-State Delivery ({taxConfig.stateName || 'State'})</span>
+                      <span className="text-[9px] px-1.5 py-0.2 rounded bg-slate-100 dark:bg-slate-800 text-slate-500">State Sales Tax</span>
+                    </div>
+                    <div className="flex justify-between text-slate-500">
+                      <span>State Rate ({Number(detailProduct.gstRate !== undefined ? detailProduct.gstRate : taxConfig.standardRate)}%):</span>
+                      <span className="font-semibold text-slate-800 dark:text-slate-200">
+                        {formatCurrency(detailProduct.sellPrice * (Number(detailProduct.gstRate !== undefined ? detailProduct.gstRate : taxConfig.standardRate) / 100), detailProduct.currency || currency)}
+                      </span>
+                    </div>
+                    <div className="flex justify-between text-slate-500">
+                      <span>Net Taxable Base:</span>
+                      <span className="font-semibold text-slate-800 dark:text-slate-200">
+                        {formatCurrency(detailProduct.sellPrice, detailProduct.currency || currency)}
+                      </span>
+                    </div>
+                    <div className="border-t border-slate-100 dark:border-slate-800 pt-1 flex justify-between font-bold text-slate-800 dark:text-slate-200">
+                      <span>Total with Tax:</span>
+                      <span className="text-teal-600 dark:text-teal-400">
+                        {formatCurrency(detailProduct.sellPrice * (1 + Number(detailProduct.gstRate !== undefined ? detailProduct.gstRate : taxConfig.standardRate) / 100), detailProduct.currency || currency)}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/70 p-2.5 space-y-1.5 font-mono text-[11px]">
+                    <div className="font-sans font-bold text-slate-700 dark:text-slate-300 text-xs flex items-center gap-1">
+                      <span>Out-of-State / Resale Exemption</span>
+                      <span className="text-[9px] px-1.5 py-0.2 rounded bg-slate-100 dark:bg-slate-800 text-slate-500">0% Exempt</span>
+                    </div>
+                    <div className="flex justify-between text-slate-500">
+                      <span>Sales Tax (0%):</span>
+                      <span className="font-semibold text-slate-800 dark:text-slate-200">
+                        {formatCurrency(0, detailProduct.currency || currency)}
+                      </span>
+                    </div>
+                    <div className="flex justify-between text-slate-500">
+                      <span>Exemption Requirement:</span>
+                      <span className="text-slate-700 dark:text-slate-300 font-sans text-[10px]">Valid Resale Certificate on File</span>
+                    </div>
+                    <div className="border-t border-slate-100 dark:border-slate-800 pt-1 flex justify-between font-bold text-slate-800 dark:text-slate-200">
+                      <span>Total Net:</span>
+                      <span className="text-teal-600 dark:text-teal-400">
+                        {formatCurrency(detailProduct.sellPrice, detailProduct.currency || currency)}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="rounded-xl border border-slate-200 dark:border-slate-800 p-3.5 bg-slate-50/50 dark:bg-slate-800/30 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <h4 className="font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
+                    <span className="flex h-2 w-2 rounded-full bg-teal-500" />
+                    GST 2.0 Statutory Tax Classification
+                  </h4>
+                  <span className="text-[10px] px-2 py-0.5 rounded bg-teal-500/10 text-teal-700 dark:text-teal-300 font-mono font-semibold">
+                    HSN: {detailProduct.hsnCode || 'N/A'} • Slab: {detailProduct.gstRate !== undefined ? `${detailProduct.gstRate}%` : '18%'}
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
+                  <div className="rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/70 p-2.5 space-y-1.5 font-mono text-[11px]">
+                    <div className="font-sans font-bold text-slate-700 dark:text-slate-300 text-xs flex items-center gap-1">
+                      <span>Intra-State Supply (Same State)</span>
+                      <span className="text-[9px] px-1.5 py-0.2 rounded bg-slate-100 dark:bg-slate-800 text-slate-500">CGST + SGST</span>
+                    </div>
+                    <div className="flex justify-between text-slate-500">
+                      <span>CGST ({(Number(detailProduct.gstRate !== undefined ? detailProduct.gstRate : 18) / 2).toFixed(1)}%):</span>
+                      <span className="font-semibold text-slate-800 dark:text-slate-200">
+                        {formatCurrency(detailProduct.sellPrice * (Number(detailProduct.gstRate !== undefined ? detailProduct.gstRate : 18) / 200), detailProduct.currency || currency)}
+                      </span>
+                    </div>
+                    <div className="flex justify-between text-slate-500">
+                      <span>SGST ({(Number(detailProduct.gstRate !== undefined ? detailProduct.gstRate : 18) / 2).toFixed(1)}%):</span>
+                      <span className="font-semibold text-slate-800 dark:text-slate-200">
+                        {formatCurrency(detailProduct.sellPrice * (Number(detailProduct.gstRate !== undefined ? detailProduct.gstRate : 18) / 200), detailProduct.currency || currency)}
+                      </span>
+                    </div>
+                    <div className="border-t border-slate-100 dark:border-slate-800 pt-1 flex justify-between font-bold text-slate-800 dark:text-slate-200">
+                      <span>Total Incl. GST:</span>
+                      <span className="text-teal-600 dark:text-teal-400">
+                        {formatCurrency(detailProduct.sellPrice * (1 + Number(detailProduct.gstRate !== undefined ? detailProduct.gstRate : 18) / 100), detailProduct.currency || currency)}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/70 p-2.5 space-y-1.5 font-mono text-[11px]">
+                    <div className="font-sans font-bold text-slate-700 dark:text-slate-300 text-xs flex items-center gap-1">
+                      <span>Inter-State Supply (Out of State)</span>
+                      <span className="text-[9px] px-1.5 py-0.2 rounded bg-slate-100 dark:bg-slate-800 text-slate-500">IGST Only</span>
+                    </div>
+                    <div className="flex justify-between text-slate-500">
+                      <span>IGST ({Number(detailProduct.gstRate !== undefined ? detailProduct.gstRate : 18)}%):</span>
+                      <span className="font-semibold text-slate-800 dark:text-slate-200">
+                        {formatCurrency(detailProduct.sellPrice * (Number(detailProduct.gstRate !== undefined ? detailProduct.gstRate : 18) / 100), detailProduct.currency || currency)}
+                      </span>
+                    </div>
+                    <div className="flex justify-between text-slate-500">
+                      <span>Place of Supply Rule:</span>
+                      <span className="text-slate-700 dark:text-slate-300 font-sans text-[10px]">Shipping Destination State</span>
+                    </div>
+                    <div className="border-t border-slate-100 dark:border-slate-800 pt-1 flex justify-between font-bold text-slate-800 dark:text-slate-200">
+                      <span>Total Incl. GST:</span>
+                      <span className="text-teal-600 dark:text-teal-400">
+                        {formatCurrency(detailProduct.sellPrice * (1 + Number(detailProduct.gstRate !== undefined ? detailProduct.gstRate : 18) / 100), detailProduct.currency || currency)}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* Warehouse Stock Breakdown */}
             <div className="space-y-2">
@@ -2686,6 +3048,30 @@ export const Products: React.FC = () => {
           </div>
         </Modal>
       )}
+
+      {/* Central Portal-Based Table Tooltip (Immune to table overflow-x-auto & overflow-hidden clipping) */}
+      {activeTableTooltip &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <div
+            className="fixed z-[99999] pointer-events-none transition-opacity duration-150 animate-in fade-in"
+            style={{
+              top: `${activeTableTooltip.top}px`,
+              left: `${activeTableTooltip.left}px`,
+              transform:
+                activeTableTooltip.placement === 'top'
+                  ? activeTableTooltip.align === 'center'
+                    ? 'translate(-50%, -100%)'
+                    : 'translate(0, -100%)'
+                  : activeTableTooltip.align === 'center'
+                  ? 'translate(-50%, 0)'
+                  : 'translate(0, 0)',
+            }}
+          >
+            {activeTableTooltip.content}
+          </div>,
+          document.body
+        )}
     </div>
   );
 };

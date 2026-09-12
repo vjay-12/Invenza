@@ -32,8 +32,6 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
     ledger,
     salesOrders,
     formatCurrency,
-    convertAmount,
-    currency,
     selectedLocationId,
   } = useInventory();
 
@@ -52,10 +50,9 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
         selectedLocationId === 'all'
           ? p.currentStock
           : p.locationStock[selectedLocationId] || 0;
-      const unitCostInActiveCur = convertAmount(p.costPrice, p.currency || currency, currency);
-      return sum + qty * unitCostInActiveCur;
+      return sum + qty * Number(p.costPrice || 0);
     }, 0);
-  }, [activeProducts, selectedLocationId, convertAmount, currency]);
+  }, [activeProducts, selectedLocationId]);
 
   // Low stock items: 0 < currentStock <= reorderPoint
   const lowStockItems = React.useMemo(() => {
@@ -330,7 +327,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ onNavigate }) => {
           <div className="text-lg sm:text-xl font-bold text-slate-900 dark:text-[#e8e8e4]">
             {activeProducts.length}
           </div>
-          <div className="text-[11px] text-slate-400 dark:text-[#7a7d87] mt-1">
+          <div className="text-[11px] text-slate-500 dark:text-[#7a7d87] mt-1">
             Active catalog variants
           </div>
         </div>

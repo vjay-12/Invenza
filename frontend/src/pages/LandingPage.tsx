@@ -68,6 +68,7 @@ const AI_CONVERSATIONS = [
 
 export const LandingPage: React.FC<{ onNavigate?: (tab: string) => void }> = ({ onNavigate }) => {
   const { theme, toggleTheme } = useTheme();
+  const isDark = theme === 'dark';
   const [isSignInOpen, setIsSignInOpen] = useState(false);
 
   // --- Scroll Progress & Storytelling State ---
@@ -638,11 +639,11 @@ export const LandingPage: React.FC<{ onNavigate?: (tab: string) => void }> = ({ 
             title="Invenza Home"
           >
             <img
-              src="/invenza-logo-transparent.png"
+              src={isDark ? '/invenza-logo-dark.png' : '/invenza-logo-light.png'}
               alt="Invenza"
               className="h-9 w-auto max-w-[170px] object-contain transition-opacity duration-150 group-hover:opacity-90"
               onError={(e) => {
-                e.currentTarget.src = '/invenza-logo-cropped.png';
+                e.currentTarget.src = isDark ? '/invenza-logo-transparent.png' : '/invenza-logo-cropped.png';
               }}
             />
             <span className="hidden sm:inline-block px-2 py-0.5 rounded text-[10px] font-mono font-semibold bg-teal-500/10 text-teal-700 dark:text-teal-400 border border-teal-500/20">
@@ -1181,19 +1182,60 @@ export const LandingPage: React.FC<{ onNavigate?: (tab: string) => void }> = ({ 
               {/* Warehouse Floor Layout Schematic Graphic - Fully Interactive Zones */}
               <div
                 onMouseLeave={() => setHoveredFacilityZone(null)}
-                className="mt-2.5 sm:mt-3 p-3 rounded-xl bg-white dark:bg-[#131924] border border-slate-200 dark:border-[#1E2636] transition-all"
+                className="mt-2.5 sm:mt-3 p-3 rounded-xl bg-white dark:bg-[#131924] border border-slate-200 dark:border-[#1E2636] transition-all shadow-sm"
               >
-                <div className="flex items-center justify-between mb-1.5">
-                  <span className="text-[11px] font-mono font-bold text-slate-400 uppercase tracking-wider">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-[11px] font-mono font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider">
                     Architectural Facility Layout Graphic
                   </span>
-                  <span className="text-[10px] font-mono text-teal-400">
+                  <span className="text-[10px] font-mono font-semibold text-teal-600 dark:text-teal-400">
                     Hover Zones to Inspect
                   </span>
                 </div>
                 <svg viewBox="0 0 400 120" className="w-full h-auto text-slate-500 select-none">
-                  {/* Outer Warehouse Perimeter */}
-                  <rect x="5" y="5" width="390" height="110" rx="8" fill="#0C1017" stroke="#1E2636" strokeWidth="1.5" />
+                  <defs>
+                    {/* Architectural Blueprint Grid Pattern */}
+                    <pattern id="facilityGrid" width="16" height="16" patternUnits="userSpaceOnUse">
+                      <path
+                        d="M 16 0 L 0 0 0 16"
+                        fill="none"
+                        stroke={isDark ? '#16202E' : '#E2E8F0'}
+                        strokeWidth="0.5"
+                      />
+                    </pattern>
+                  </defs>
+
+                  {/* Outer Warehouse Perimeter Floor */}
+                  <rect
+                    x="5"
+                    y="5"
+                    width="390"
+                    height="110"
+                    rx="8"
+                    fill={isDark ? '#0C1017' : '#F8FAFC'}
+                    stroke={isDark ? '#1E2636' : '#CBD5E1'}
+                    strokeWidth="1.5"
+                  />
+                  <rect
+                    x="5"
+                    y="5"
+                    width="390"
+                    height="110"
+                    rx="8"
+                    fill="url(#facilityGrid)"
+                    opacity={isDark ? 0.6 : 0.75}
+                  />
+
+                  {/* Forklift Central Transit Lane Guide */}
+                  <line
+                    x1="90"
+                    y1="60"
+                    x2="255"
+                    y2="60"
+                    stroke={isDark ? '#1E2636' : '#E2E8F0'}
+                    strokeWidth="1"
+                    strokeDasharray="4 4"
+                  />
 
                   {/* Receiving Dock */}
                   <g
@@ -1206,13 +1248,33 @@ export const LandingPage: React.FC<{ onNavigate?: (tab: string) => void }> = ({ 
                       width="70"
                       height="90"
                       rx="4"
-                      fill={hoveredFacilityZone === 'inbound' ? '#0f2922' : '#131924'}
-                      stroke={hoveredFacilityZone === 'inbound' ? '#2dd4bf' : '#334155'}
+                      fill={hoveredFacilityZone === 'inbound' ? (isDark ? '#0f2922' : '#DCFCE7') : (isDark ? '#131924' : '#F0FDF4')}
+                      stroke={hoveredFacilityZone === 'inbound' ? (isDark ? '#2dd4bf' : '#059669') : (isDark ? '#334155' : '#86EFAC')}
                       strokeWidth={hoveredFacilityZone === 'inbound' ? '1.5' : '1'}
                       strokeDasharray={hoveredFacilityZone === 'inbound' ? undefined : '3 3'}
                     />
-                    <text x="50" y="55" fill={hoveredFacilityZone === 'inbound' ? '#ffffff' : '#94a3b8'} fontSize="9" textAnchor="middle" fontFamily="monospace" fontWeight={hoveredFacilityZone === 'inbound' ? 'bold' : 'normal'}>INBOUND DOCK</text>
-                    <text x="50" y="70" fill={hoveredFacilityZone === 'inbound' ? '#5eead4' : '#2dd4bf'} fontSize="8" textAnchor="middle" fontFamily="monospace">GRN Inspection</text>
+                    <text
+                      x="50"
+                      y="55"
+                      fill={hoveredFacilityZone === 'inbound' ? (isDark ? '#ffffff' : '#065F46') : (isDark ? '#94a3b8' : '#166534')}
+                      fontSize="9"
+                      textAnchor="middle"
+                      fontFamily="monospace"
+                      fontWeight={hoveredFacilityZone === 'inbound' ? 'bold' : '600'}
+                    >
+                      INBOUND DOCK
+                    </text>
+                    <text
+                      x="50"
+                      y="70"
+                      fill={hoveredFacilityZone === 'inbound' ? (isDark ? '#5eead4' : '#059669') : (isDark ? '#2dd4bf' : '#0D9488')}
+                      fontSize="8"
+                      textAnchor="middle"
+                      fontFamily="monospace"
+                      fontWeight="500"
+                    >
+                      GRN Inspection
+                    </text>
                   </g>
 
                   {/* Aisle A: Racks */}
@@ -1225,12 +1287,23 @@ export const LandingPage: React.FC<{ onNavigate?: (tab: string) => void }> = ({ 
                       y="15"
                       width="35"
                       height="90"
-                      rx="2"
-                      fill={hoveredFacilityZone === 'aisleA' ? '#172554' : '#131924'}
-                      stroke={hoveredFacilityZone === 'aisleA' ? '#38bdf8' : '#1E2636'}
+                      rx="3"
+                      fill={hoveredFacilityZone === 'aisleA' ? (isDark ? '#172554' : '#E0F2FE') : (isDark ? '#131924' : '#F0F9FF')}
+                      stroke={hoveredFacilityZone === 'aisleA' ? (isDark ? '#38bdf8' : '#0284C7') : (isDark ? '#1E2636' : '#BAE6FD')}
                       strokeWidth={hoveredFacilityZone === 'aisleA' ? '1.5' : '1'}
                     />
-                    <text x="122" y="65" fill={hoveredFacilityZone === 'aisleA' ? '#7dd3fc' : '#64748b'} fontSize="8" fontWeight={hoveredFacilityZone === 'aisleA' ? 'bold' : 'normal'} textAnchor="middle" transform="rotate(-90 122 65)">AISLE A: RACKS</text>
+                    <text
+                      x="122"
+                      y="65"
+                      fill={hoveredFacilityZone === 'aisleA' ? (isDark ? '#7dd3fc' : '#0369A1') : (isDark ? '#64748b' : '#0284C7')}
+                      fontSize="8"
+                      fontWeight={hoveredFacilityZone === 'aisleA' ? 'bold' : '600'}
+                      textAnchor="middle"
+                      transform="rotate(-90 122 65)"
+                      fontFamily="monospace"
+                    >
+                      AISLE A: RACKS
+                    </text>
                   </g>
 
                   {/* Aisle B: Bins */}
@@ -1243,12 +1316,23 @@ export const LandingPage: React.FC<{ onNavigate?: (tab: string) => void }> = ({ 
                       y="15"
                       width="35"
                       height="90"
-                      rx="2"
-                      fill={hoveredFacilityZone === 'aisleB' ? '#1e1b4b' : '#131924'}
-                      stroke={hoveredFacilityZone === 'aisleB' ? '#818cf8' : '#1E2636'}
+                      rx="3"
+                      fill={hoveredFacilityZone === 'aisleB' ? (isDark ? '#1e1b4b' : '#E0E7FF') : (isDark ? '#131924' : '#EEF2FF')}
+                      stroke={hoveredFacilityZone === 'aisleB' ? (isDark ? '#818cf8' : '#4F46E5') : (isDark ? '#1E2636' : '#C7D2FE')}
                       strokeWidth={hoveredFacilityZone === 'aisleB' ? '1.5' : '1'}
                     />
-                    <text x="172" y="65" fill={hoveredFacilityZone === 'aisleB' ? '#a5b4fc' : '#64748b'} fontSize="8" fontWeight={hoveredFacilityZone === 'aisleB' ? 'bold' : 'normal'} textAnchor="middle" transform="rotate(-90 172 65)">AISLE B: BINS</text>
+                    <text
+                      x="172"
+                      y="65"
+                      fill={hoveredFacilityZone === 'aisleB' ? (isDark ? '#a5b4fc' : '#3730A3') : (isDark ? '#64748b' : '#4F46E5')}
+                      fontSize="8"
+                      fontWeight={hoveredFacilityZone === 'aisleB' ? 'bold' : '600'}
+                      textAnchor="middle"
+                      transform="rotate(-90 172 65)"
+                      fontFamily="monospace"
+                    >
+                      AISLE B: BINS
+                    </text>
                   </g>
 
                   {/* Aisle C: Bulk */}
@@ -1261,12 +1345,23 @@ export const LandingPage: React.FC<{ onNavigate?: (tab: string) => void }> = ({ 
                       y="15"
                       width="35"
                       height="90"
-                      rx="2"
-                      fill={hoveredFacilityZone === 'aisleC' ? '#142a3a' : '#131924'}
-                      stroke={hoveredFacilityZone === 'aisleC' ? '#0ea5e9' : '#1E2636'}
+                      rx="3"
+                      fill={hoveredFacilityZone === 'aisleC' ? (isDark ? '#142a3a' : '#CFFAFE') : (isDark ? '#131924' : '#ECFEFF')}
+                      stroke={hoveredFacilityZone === 'aisleC' ? (isDark ? '#0ea5e9' : '#0891B2') : (isDark ? '#1E2636' : '#A5F3FC')}
                       strokeWidth={hoveredFacilityZone === 'aisleC' ? '1.5' : '1'}
                     />
-                    <text x="222" y="65" fill={hoveredFacilityZone === 'aisleC' ? '#38bdf8' : '#64748b'} fontSize="8" fontWeight={hoveredFacilityZone === 'aisleC' ? 'bold' : 'normal'} textAnchor="middle" transform="rotate(-90 222 65)">AISLE C: BULK</text>
+                    <text
+                      x="222"
+                      y="65"
+                      fill={hoveredFacilityZone === 'aisleC' ? (isDark ? '#38bdf8' : '#155E75') : (isDark ? '#64748b' : '#0891B2')}
+                      fontSize="8"
+                      fontWeight={hoveredFacilityZone === 'aisleC' ? 'bold' : '600'}
+                      textAnchor="middle"
+                      transform="rotate(-90 222 65)"
+                      fontFamily="monospace"
+                    >
+                      AISLE C: BULK
+                    </text>
                   </g>
 
                   {/* Packing & Staging */}
@@ -1280,12 +1375,32 @@ export const LandingPage: React.FC<{ onNavigate?: (tab: string) => void }> = ({ 
                       width="55"
                       height="90"
                       rx="4"
-                      fill={hoveredFacilityZone === 'packing' ? '#2e1065' : '#131924'}
-                      stroke={hoveredFacilityZone === 'packing' ? '#a855f7' : '#334155'}
+                      fill={hoveredFacilityZone === 'packing' ? (isDark ? '#2e1065' : '#F3E8FF') : (isDark ? '#131924' : '#FAF5FF')}
+                      stroke={hoveredFacilityZone === 'packing' ? (isDark ? '#a855f7' : '#9333EA') : (isDark ? '#334155' : '#D8B4FE')}
                       strokeWidth={hoveredFacilityZone === 'packing' ? '1.5' : '1'}
                     />
-                    <text x="287" y="55" fill={hoveredFacilityZone === 'packing' ? '#ffffff' : '#94a3b8'} fontSize="8" textAnchor="middle" fontFamily="monospace" fontWeight={hoveredFacilityZone === 'packing' ? 'bold' : 'normal'}>PACKING</text>
-                    <text x="287" y="70" fill={hoveredFacilityZone === 'packing' ? '#c084fc' : '#a78bfa'} fontSize="8" textAnchor="middle" fontFamily="monospace">Scan & Stage</text>
+                    <text
+                      x="287"
+                      y="55"
+                      fill={hoveredFacilityZone === 'packing' ? (isDark ? '#ffffff' : '#581C87') : (isDark ? '#94a3b8' : '#6B21A8')}
+                      fontSize="8"
+                      textAnchor="middle"
+                      fontFamily="monospace"
+                      fontWeight={hoveredFacilityZone === 'packing' ? 'bold' : '600'}
+                    >
+                      PACKING
+                    </text>
+                    <text
+                      x="287"
+                      y="70"
+                      fill={hoveredFacilityZone === 'packing' ? (isDark ? '#c084fc' : '#7E22CE') : (isDark ? '#a78bfa' : '#9333EA')}
+                      fontSize="8"
+                      textAnchor="middle"
+                      fontFamily="monospace"
+                      fontWeight="500"
+                    >
+                      Scan & Stage
+                    </text>
                   </g>
 
                   {/* Outbound Bay */}
@@ -1299,21 +1414,41 @@ export const LandingPage: React.FC<{ onNavigate?: (tab: string) => void }> = ({ 
                       width="55"
                       height="90"
                       rx="4"
-                      fill={hoveredFacilityZone === 'dispatch' ? '#064e3b' : '#131924'}
-                      stroke={hoveredFacilityZone === 'dispatch' ? '#34d399' : '#334155'}
+                      fill={hoveredFacilityZone === 'dispatch' ? (isDark ? '#064e3b' : '#DCFCE7') : (isDark ? '#131924' : '#F0FDF4')}
+                      stroke={hoveredFacilityZone === 'dispatch' ? (isDark ? '#34d399' : '#16A34A') : (isDark ? '#334155' : '#BBF7D0')}
                       strokeWidth={hoveredFacilityZone === 'dispatch' ? '1.5' : '1'}
                       strokeDasharray={hoveredFacilityZone === 'dispatch' ? undefined : '3 3'}
                     />
-                    <text x="357" y="55" fill={hoveredFacilityZone === 'dispatch' ? '#ffffff' : '#94a3b8'} fontSize="8" textAnchor="middle" fontFamily="monospace" fontWeight={hoveredFacilityZone === 'dispatch' ? 'bold' : 'normal'}>DISPATCH</text>
-                    <text x="357" y="70" fill={hoveredFacilityZone === 'dispatch' ? '#6ee7b7' : '#34d399'} fontSize="8" textAnchor="middle" fontFamily="monospace">Ready to Ship</text>
+                    <text
+                      x="357"
+                      y="55"
+                      fill={hoveredFacilityZone === 'dispatch' ? (isDark ? '#ffffff' : '#14532D') : (isDark ? '#94a3b8' : '#166534')}
+                      fontSize="8"
+                      textAnchor="middle"
+                      fontFamily="monospace"
+                      fontWeight={hoveredFacilityZone === 'dispatch' ? 'bold' : '600'}
+                    >
+                      DISPATCH
+                    </text>
+                    <text
+                      x="357"
+                      y="70"
+                      fill={hoveredFacilityZone === 'dispatch' ? (isDark ? '#6ee7b7' : '#15803D') : (isDark ? '#34d399' : '#16A34A')}
+                      fontSize="8"
+                      textAnchor="middle"
+                      fontFamily="monospace"
+                      fontWeight="500"
+                    >
+                      Ready to Ship
+                    </text>
                   </g>
                 </svg>
 
                 {/* Live Reactive Zone Telemetry Readout */}
                 <div className="mt-2 py-1.5 px-2.5 rounded-lg bg-[#F6F8FA] dark:bg-[#0C1017] border border-slate-200 dark:border-[#1E2636] flex items-center justify-between text-xs font-mono">
                   <div className="flex items-center gap-2 min-w-0">
-                    <span className="w-2 h-2 rounded-full bg-teal-400 animate-pulse shrink-0" />
-                    <span className="text-slate-700 dark:text-slate-300 font-semibold text-[10px] sm:text-[11px] truncate">
+                    <span className="w-2 h-2 rounded-full bg-teal-500 dark:bg-teal-400 animate-pulse shrink-0" />
+                    <span className="text-slate-800 dark:text-slate-200 font-semibold text-[10px] sm:text-[11px] truncate">
                       {hoveredFacilityZone === 'inbound' && 'INBOUND BAY 01: Barcode verification of 140 crates • 98.4% intake speed'}
                       {hoveredFacilityZone === 'aisleA' && 'AISLE A (RACKS): Heavy pallet racking • 84% capacity utilized'}
                       {hoveredFacilityZone === 'aisleB' && 'AISLE B (BINS): High-density pick face • Fast moving SKUs active'}
@@ -1323,7 +1458,7 @@ export const LandingPage: React.FC<{ onNavigate?: (tab: string) => void }> = ({ 
                       {!hoveredFacilityZone && 'HOVER OVER ANY FACILITY ZONE TO INSPECT REAL-TIME BAY TELEMETRY'}
                     </span>
                   </div>
-                  <span className="text-[10px] text-teal-400/80 font-bold uppercase hidden sm:inline shrink-0 ml-2">
+                  <span className="text-[10px] text-teal-600 dark:text-teal-400 font-bold uppercase hidden sm:inline shrink-0 ml-2">
                     {hoveredFacilityZone ? 'LIVE SENSOR' : 'INTERACTIVE'}
                   </span>
                 </div>
@@ -1379,7 +1514,7 @@ export const LandingPage: React.FC<{ onNavigate?: (tab: string) => void }> = ({ 
                     y1="80"
                     x2="280"
                     y2="80"
-                    stroke="#1E2636"
+                    stroke={isDark ? '#1E2636' : '#CBD5E1'}
                     strokeWidth="2"
                     strokeDasharray="4 4"
                   />
@@ -1498,15 +1633,15 @@ export const LandingPage: React.FC<{ onNavigate?: (tab: string) => void }> = ({ 
                             width="44"
                             height="16"
                             rx="4"
-                            fill="#131924"
-                            stroke="#2dd4bf"
+                            fill={isDark ? '#131924' : '#FFFFFF'}
+                            stroke={isDark ? '#2dd4bf' : '#0D9488'}
                             strokeWidth="1"
                             opacity="0.95"
                           />
                           <text
                             x="80"
                             y="59"
-                            fill="#2dd4bf"
+                            fill={isDark ? '#2dd4bf' : '#0F766E'}
                             fontSize="8"
                             fontWeight="bold"
                             textAnchor="middle"
@@ -1526,16 +1661,16 @@ export const LandingPage: React.FC<{ onNavigate?: (tab: string) => void }> = ({ 
                       <circle
                         r="24"
                         fill="none"
-                        stroke="#2dd4bf"
+                        stroke={isDark ? '#2dd4bf' : '#0D9488'}
                         strokeWidth="1.5"
                         style={{ animation: 'nodeBeaconWave 1.2s cubic-bezier(0, 0.2, 0.8, 1) infinite' }}
                       />
                     )}
-                    <circle r="24" fill="#131924" stroke="#2dd4bf" strokeWidth={isTransferring ? '2.5' : '2'} />
-                    <circle r="6" fill="#2dd4bf" className={isTransferring ? 'animate-ping' : ''} />
-                    <circle r="6" fill="#2dd4bf" />
-                    <text y="38" fill="#ffffff" fontSize="10" fontWeight="bold" textAnchor="middle">Central Hub</text>
-                    <text y="50" fill="#94a3b8" fontSize="8" textAnchor="middle">Bangalore (KA)</text>
+                    <circle r="24" fill={isDark ? '#131924' : '#FFFFFF'} stroke={isDark ? '#2dd4bf' : '#0D9488'} strokeWidth={isTransferring ? '2.5' : '2'} />
+                    <circle r="6" fill={isDark ? '#2dd4bf' : '#0D9488'} className={isTransferring ? 'animate-ping' : ''} />
+                    <circle r="6" fill={isDark ? '#2dd4bf' : '#0D9488'} />
+                    <text y="38" fill={isDark ? '#ffffff' : '#0F172A'} fontSize="10" fontWeight="bold" textAnchor="middle">Central Hub</text>
+                    <text y="50" fill={isDark ? '#94a3b8' : '#475569'} fontSize="8" fontWeight="500" textAnchor="middle">Bangalore (KA)</text>
                   </g>
 
                   {/* Hub 2: North Depot (Delhi) */}
@@ -1545,7 +1680,7 @@ export const LandingPage: React.FC<{ onNavigate?: (tab: string) => void }> = ({ 
                       <circle
                         r="32"
                         fill="none"
-                        stroke="#818cf8"
+                        stroke={isDark ? '#818cf8' : '#4F46E5'}
                         strokeWidth="1.5"
                         opacity="0.6"
                         className="animate-pulse"
@@ -1555,34 +1690,34 @@ export const LandingPage: React.FC<{ onNavigate?: (tab: string) => void }> = ({ 
                       <circle
                         r="24"
                         fill="none"
-                        stroke="#10b981"
+                        stroke={isDark ? '#10b981' : '#059669'}
                         strokeWidth="2.5"
                         style={{ animation: 'nodeBeaconWave 0.8s ease-out 2' }}
                       />
                     )}
-                    <circle r="24" fill="#131924" stroke={transferSuccess ? '#10b981' : isTransferring ? '#818cf8' : '#818cf8'} strokeWidth={transferSuccess || isTransferring ? '2.5' : '2'} />
-                    <circle r="6" fill={transferSuccess ? '#10b981' : '#818cf8'} />
-                    <text y="38" fill="#ffffff" fontSize="10" fontWeight="bold" textAnchor="middle">North Depot</text>
-                    <text y="50" fill="#94a3b8" fontSize="8" textAnchor="middle">Delhi (DL)</text>
+                    <circle r="24" fill={isDark ? '#131924' : '#FFFFFF'} stroke={transferSuccess ? (isDark ? '#10b981' : '#059669') : (isDark ? '#818cf8' : '#4F46E5')} strokeWidth={transferSuccess || isTransferring ? '2.5' : '2'} />
+                    <circle r="6" fill={transferSuccess ? (isDark ? '#10b981' : '#059669') : (isDark ? '#818cf8' : '#4F46E5')} />
+                    <text y="38" fill={isDark ? '#ffffff' : '#0F172A'} fontSize="10" fontWeight="bold" textAnchor="middle">North Depot</text>
+                    <text y="50" fill={isDark ? '#94a3b8' : '#475569'} fontSize="8" fontWeight="500" textAnchor="middle">Delhi (DL)</text>
                   </g>
                 </svg>
 
                 {/* Transit Status Badge */}
                 <div className="text-center mt-2">
                   {isTransferring && (
-                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-mono font-semibold bg-teal-500/10 text-teal-300 border border-teal-500/30">
-                      <span className="w-1.5 h-1.5 rounded-full bg-teal-400" />
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-mono font-semibold bg-teal-500/10 text-teal-700 dark:text-teal-300 border border-teal-500/30">
+                      <span className="w-1.5 h-1.5 rounded-full bg-teal-500 dark:bg-teal-400" />
                       In-Transit: 50 units Bearings moving to Delhi...
                     </span>
                   )}
                   {transferSuccess && (
-                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-mono font-semibold bg-emerald-500/10 text-emerald-300 border border-emerald-500/30">
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-mono font-semibold bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30">
                       <IconCheck className="w-3.5 h-3.5" />
                       Transfer Complete: North Depot stock updated!
                     </span>
                   )}
                   {!isTransferring && !transferSuccess && (
-                    <span className="text-[11px] text-slate-500 font-mono">
+                    <span className="text-[11px] text-slate-600 dark:text-slate-400 font-mono">
                       Route active: Bangalore to Delhi line clear
                     </span>
                   )}
@@ -1592,16 +1727,16 @@ export const LandingPage: React.FC<{ onNavigate?: (tab: string) => void }> = ({ 
               {/* Dynamic Live Inventory Stats for the 2 Hubs */}
               <div className="grid grid-cols-2 gap-2.5 mt-2.5 text-xs">
                 <div className="p-2.5 rounded-xl bg-[#F6F8FA] dark:bg-[#0C1017] border border-slate-200 dark:border-[#1E2636]">
-                  <div className="text-slate-400 font-medium text-[11px]">Central Hub (Origin)</div>
-                  <div className="text-base sm:text-lg font-bold text-teal-400 font-mono mt-0.5">
+                  <div className="text-slate-600 dark:text-slate-400 font-medium text-[11px]">Central Hub (Origin)</div>
+                  <div className="text-base sm:text-lg font-bold text-teal-600 dark:text-teal-400 font-mono mt-0.5">
                     {whCentralStock} units
                   </div>
                   <div className="text-[10px] text-slate-500">Bearings Available</div>
                 </div>
 
                 <div className="p-2.5 rounded-xl bg-[#F6F8FA] dark:bg-[#0C1017] border border-slate-200 dark:border-[#1E2636]">
-                  <div className="text-slate-400 font-medium text-[11px]">North Depot (Destination)</div>
-                  <div className="text-base sm:text-lg font-bold text-indigo-400 font-mono mt-0.5">
+                  <div className="text-slate-600 dark:text-slate-400 font-medium text-[11px]">North Depot (Destination)</div>
+                  <div className="text-base sm:text-lg font-bold text-indigo-600 dark:text-indigo-400 font-mono mt-0.5">
                     {whNorthStock} units
                   </div>
                   <div className="text-[10px] text-slate-500">Bearings Available</div>
@@ -3131,11 +3266,11 @@ export const LandingPage: React.FC<{ onNavigate?: (tab: string) => void }> = ({ 
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 xl:pr-20 2xl:pr-12 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-slate-500">
           <div className="flex items-center gap-3">
             <img
-              src="/invenza-logo-transparent.png"
+              src={isDark ? '/invenza-logo-dark.png' : '/invenza-logo-light.png'}
               alt="Invenza"
-              className="h-6 w-auto object-contain opacity-75 select-none"
+              className="h-6 w-auto object-contain opacity-85 select-none transition-opacity duration-150"
               onError={(e) => {
-                e.currentTarget.src = '/invenza-logo-cropped.png';
+                e.currentTarget.src = isDark ? '/invenza-logo-transparent.png' : '/invenza-logo-cropped.png';
               }}
             />
             <span className="text-slate-600">&bull;</span>

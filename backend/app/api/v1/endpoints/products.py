@@ -12,6 +12,7 @@ from app.models.ledger import StockMovement, MovementTypeEnum
 from app.models.location import Location
 from app.schemas.product import ProductCreate, ProductUpdate, ProductResponse
 from app.services.ledger_service import LedgerService
+from app.services.tax_service import get_org_tax_context, validate_product_tax_for_org
 
 router = APIRouter()
 
@@ -57,8 +58,10 @@ async def list_products(
             "barcode": p.barcode,
             "reorder_point": float(p.reorder_point),
             "max_stock": float(p.max_stock) if p.max_stock is not None else None,
-            "hsn_code": p.hsn_code or "8471",
-            "gst_rate": float(p.gst_rate if p.gst_rate is not None else 18.0),
+            "hsn_code": p.hsn_code,
+            "gst_rate": float(p.gst_rate if p.gst_rate is not None else 0.0),
+            "tax_code": p.hsn_code,
+            "tax_rate": float(p.gst_rate if p.gst_rate is not None else 0.0),
             "variant_attributes": p.variant_attributes or {},
             "custom_fields": p.custom_fields or {},
             "is_active": p.is_active,
@@ -88,6 +91,13 @@ async def create_product(
             detail=f"Product with SKU '{product_in.sku}' already exists",
         )
 
+    org_ctx = await get_org_tax_context(db, tenant_id)
+    clean_code, clean_rate = validate_product_tax_for_org(
+        org_context=org_ctx,
+        tax_code=product_in.tax_code or product_in.hsn_code,
+        tax_rate=product_in.tax_rate if product_in.tax_rate is not None else product_in.gst_rate,
+    )
+
     product = Product(
         tenant_id=tenant_id,
         sku=product_in.sku,
@@ -99,8 +109,8 @@ async def create_product(
         barcode=product_in.barcode,
         reorder_point=product_in.reorder_point,
         max_stock=product_in.max_stock,
-        hsn_code=product_in.hsn_code,
-        gst_rate=product_in.gst_rate,
+        hsn_code=clean_code,
+        gst_rate=clean_rate,
         variant_attributes=product_in.variant_attributes,
         custom_fields=product_in.custom_fields,
     )
@@ -120,8 +130,10 @@ async def create_product(
         barcode=product.barcode,
         reorder_point=float(product.reorder_point),
         max_stock=float(product.max_stock) if product.max_stock is not None else None,
-        hsn_code=product.hsn_code or "8471",
-        gst_rate=float(product.gst_rate if product.gst_rate is not None else 18.0),
+        hsn_code=product.hsn_code,
+        gst_rate=float(product.gst_rate if product.gst_rate is not None else 0.0),
+        tax_code=product.hsn_code,
+        tax_rate=float(product.gst_rate if product.gst_rate is not None else 0.0),
         variant_attributes=product.variant_attributes or {},
         custom_fields=product.custom_fields or {},
         is_active=product.is_active,
@@ -139,6 +151,18 @@ async def bulk_create_products(
     from app.models.location import Location
     from app.models.ledger import StockMovement, MovementTypeEnum
 
+    org_ctx = await get_org_tax_context(db, tenant_id)
+
+    # Validate all incoming products against the tenant's locked tax configuration
+    validated_products_data = []
+    for p_in in products_in:
+        clean_code, clean_rate = validate_product_tax_for_org(
+            org_context=org_ctx,
+            tax_code=p_in.tax_code or p_in.hsn_code,
+            tax_rate=p_in.tax_rate if p_in.tax_rate is not None else p_in.gst_rate,
+        )
+        validated_products_data.append((p_in, clean_code, clean_rate))
+
     # Resolve a default location for initial stock allocation
     loc_res = await db.execute(
         select(Location).where(Location.tenant_id == tenant_id).limit(1)
@@ -154,7 +178,7 @@ async def bulk_create_products(
         await db.flush()
 
     created_pairs = []
-    for p_in in products_in:
+    for p_in, clean_code, clean_rate in validated_products_data:
         existing = await db.execute(
             select(Product).where(
                 and_(Product.tenant_id == tenant_id, Product.sku == p_in.sku)
@@ -174,8 +198,8 @@ async def bulk_create_products(
             barcode=p_in.barcode,
             reorder_point=p_in.reorder_point,
             max_stock=p_in.max_stock,
-            hsn_code=p_in.hsn_code,
-            gst_rate=p_in.gst_rate,
+            hsn_code=clean_code,
+            gst_rate=clean_rate,
             variant_attributes=p_in.variant_attributes,
             custom_fields=p_in.custom_fields,
         )
@@ -216,8 +240,10 @@ async def bulk_create_products(
             barcode=p.barcode,
             reorder_point=float(p.reorder_point),
             max_stock=float(p.max_stock) if p.max_stock is not None else None,
-            hsn_code=p.hsn_code or "8471",
-            gst_rate=float(p.gst_rate if p.gst_rate is not None else 18.0),
+            hsn_code=p.hsn_code,
+            gst_rate=float(p.gst_rate if p.gst_rate is not None else 0.0),
+            tax_code=p.hsn_code,
+            tax_rate=float(p.gst_rate if p.gst_rate is not None else 0.0),
             variant_attributes=p.variant_attributes or {},
             custom_fields=p.custom_fields or {},
             is_active=p.is_active,
@@ -243,8 +269,25 @@ async def update_product(
         raise HTTPException(status_code=404, detail="Product not found")
 
     update_data = product_in.model_dump(exclude_unset=True)
+
+    # If tax fields are being updated, validate against tenant's locked tax context
+    if any(k in update_data for k in ("tax_code", "hsn_code", "tax_rate", "gst_rate")):
+        org_ctx = await get_org_tax_context(db, tenant_id)
+        current_code = update_data.get("tax_code", update_data.get("hsn_code", prod.hsn_code))
+        current_rate = update_data.get("tax_rate", update_data.get("gst_rate", float(prod.gst_rate or 0)))
+        clean_code, clean_rate = validate_product_tax_for_org(
+            org_context=org_ctx,
+            tax_code=current_code,
+            tax_rate=current_rate,
+        )
+        update_data["hsn_code"] = clean_code
+        update_data["gst_rate"] = clean_rate
+        update_data["tax_code"] = clean_code
+        update_data["tax_rate"] = clean_rate
+
     for field, val in update_data.items():
-        setattr(prod, field, val)
+        if hasattr(prod, field):
+            setattr(prod, field, val)
 
     await db.commit()
     await db.refresh(prod)
@@ -267,8 +310,10 @@ async def update_product(
         barcode=prod.barcode,
         reorder_point=float(prod.reorder_point),
         max_stock=float(prod.max_stock) if prod.max_stock is not None else None,
-        hsn_code=prod.hsn_code or "8471",
-        gst_rate=float(prod.gst_rate if prod.gst_rate is not None else 18.0),
+        hsn_code=prod.hsn_code,
+        gst_rate=float(prod.gst_rate if prod.gst_rate is not None else 0.0),
+        tax_code=prod.hsn_code,
+        tax_rate=float(prod.gst_rate if prod.gst_rate is not None else 0.0),
         variant_attributes=prod.variant_attributes or {},
         custom_fields=prod.custom_fields or {},
         is_active=prod.is_active,
@@ -288,11 +333,19 @@ async def clear_all_products(
     from app.models.adjustment import StockAdjustment
     from sqlalchemy import delete
 
-    # Remove all related items to respect foreign keys
-    await db.execute(delete(StockMovement).where(StockMovement.tenant_id == tenant_id))
-    await db.execute(delete(StockAdjustment).where(StockAdjustment.tenant_id == tenant_id))
-    await db.execute(delete(Product).where(Product.tenant_id == tenant_id))
-    await db.commit()
+    prods_res = await db.execute(select(Product.id).where(Product.tenant_id == tenant_id))
+    prod_ids = prods_res.scalars().all()
+
+    # Remove all related items to respect foreign keys before deleting products
+    if prod_ids:
+        await db.execute(delete(StockMovement).where(StockMovement.tenant_id == tenant_id))
+        await db.execute(delete(StockAdjustment).where(StockAdjustment.tenant_id == tenant_id))
+        await db.execute(delete(StockTransferItem).where(StockTransferItem.product_id.in_(prod_ids)))
+        await db.execute(delete(PurchaseOrderItem).where(PurchaseOrderItem.product_id.in_(prod_ids)))
+        await db.execute(delete(SalesOrderItem).where(SalesOrderItem.product_id.in_(prod_ids)))
+        await db.execute(delete(Product).where(Product.tenant_id == tenant_id))
+        await db.commit()
+
     return {"message": "All products and related stock movements cleared from database."}
 
 @router.delete("/{product_id}", status_code=status.HTTP_200_OK)
@@ -303,45 +356,26 @@ async def delete_product(
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(
-        select(Product).where(and_(Product.id == product_id, Product.tenant_id == tenant_id, Product.is_active == True))
+        select(Product).where(and_(Product.id == product_id, Product.tenant_id == tenant_id))
     )
     prod = result.scalar_one_or_none()
     if not prod:
         raise HTTPException(status_code=404, detail="Product not found")
 
-    # Determine current stock balance to deduct
-    current_stock = await LedgerService.get_current_stock(
-        db=db,
-        tenant_id=tenant_id,
-        product_id=prod.id,
-    )
+    from app.models.adjustment import StockAdjustment
+    from app.models.transfer import StockTransferItem
+    from app.models.order import PurchaseOrderItem, SalesOrderItem
+    from sqlalchemy import delete
 
-    # Find active location to bind the audit entry
-    loc_res = await db.execute(
-        select(Location).where(and_(Location.tenant_id == tenant_id, Location.is_active == True)).limit(1)
-    )
-    loc = loc_res.scalar_one_or_none()
-    loc_id = loc.id if loc else None
+    # Remove all dependent items to satisfy foreign key constraints
+    await db.execute(delete(StockMovement).where(and_(StockMovement.tenant_id == tenant_id, StockMovement.product_id == prod.id)))
+    await db.execute(delete(StockAdjustment).where(and_(StockAdjustment.tenant_id == tenant_id, StockAdjustment.product_id == prod.id)))
+    await db.execute(delete(StockTransferItem).where(StockTransferItem.product_id == prod.id))
+    await db.execute(delete(PurchaseOrderItem).where(PurchaseOrderItem.product_id == prod.id))
+    await db.execute(delete(SalesOrderItem).where(SalesOrderItem.product_id == prod.id))
 
-    operator_name = (current_user.full_name or current_user.email) if current_user else "Administrator"
-
-    if loc_id:
-        # Record immutable audit trail movement for product removal
-        await LedgerService.record_movement(
-            db=db,
-            tenant_id=tenant_id,
-            product_id=prod.id,
-            location_id=loc_id,
-            movement_type=MovementTypeEnum.OUT,
-            quantity=float(current_stock) if current_stock > 0 else 0.0,
-            unit_cost=float(prod.cost_price or 0.0),
-            reference_type="ADJUST",
-            reference_id=f"DEL-{prod.sku}",
-            reason_code="product removed",
-            performed_by=operator_name,
-        )
-
-    # Soft delete: de-activate product while preserving historical audit & foreign key integrity
-    prod.is_active = False
+    # Permanently delete the product
+    await db.delete(prod)
     await db.commit()
-    return {"message": f"Product '{prod.name}' removed and audit trail recorded."}
+    return {"message": f"Product '{prod.name}' permanently deleted."}
+

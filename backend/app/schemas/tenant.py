@@ -9,6 +9,7 @@ class CompanyCreate(BaseModel):
     unique_code: Optional[str] = Field(None, max_length=50)
     industry: str = Field("General Merchandise", min_length=2, max_length=100)
     location: str = Field("Headquarters", min_length=2, max_length=255)
+    country_code: str = Field("IN", min_length=2, max_length=2, description="ISO country code — drives tax regime and derived currency; locked after provisioning")
     state: Optional[str] = Field(None, max_length=100)
     pincode: Optional[str] = Field(None, max_length=10)
     currency_code: str = Field("INR", min_length=3, max_length=10)
@@ -41,9 +42,10 @@ class CompanyUpdate(BaseModel):
     unique_code: Optional[str] = None
     industry: Optional[str] = None
     location: Optional[str] = None
-    state: Optional[str] = None
+    country_code: Optional[str] = None  # locked after provisioning — endpoint rejects changes
+    state: Optional[str] = None         # locked after provisioning — endpoint rejects changes
     pincode: Optional[str] = None
-    currency_code: Optional[str] = None
+    currency_code: Optional[str] = None  # locked after provisioning — endpoint rejects changes
     tier: Optional[str] = None
     tags: Optional[List[str]] = None
     enabled_modules: Optional[List[str]] = None
@@ -60,6 +62,7 @@ class CompanyResponse(BaseModel):
     location: Optional[str] = None
     state: Optional[str] = None
     pincode: Optional[str] = None
+    country_code: str = "IN"
     currency_code: str
     tier: Optional[str] = "Growth Suite"
     tags: Optional[List[str]] = []

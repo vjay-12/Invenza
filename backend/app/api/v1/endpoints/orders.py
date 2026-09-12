@@ -29,6 +29,7 @@ from app.services.ledger_service import LedgerService
 from app.services.gst_service import GSTService
 from app.services.invoice_pdf_generator import InvoicePdfGenerator
 from app.services.storage import StorageService
+from app.services.tax_service import TaxService, get_org_tax_context
 
 router = APIRouter()
 
@@ -362,43 +363,56 @@ async def fulfill_sales_order(
     if so.status == OrderStatus.COMPLETED:
         raise HTTPException(status_code=400, detail="Sales order already fulfilled")
 
+    # 0. Org tax identity — India keeps GST rules; EU/US use regional single-rate tax
+    org_ctx = await get_org_tax_context(db, tenant_id)
+    org_country = org_ctx["country_code"]
+    is_india = org_country == "IN"
+
     # 1. Pre-validation: Check Tenant Invoicing Settings & Registered Business State
     sett_res = await db.execute(select(TenantSettings).where(TenantSettings.tenant_id == tenant_id))
     sett = sett_res.scalar_one_or_none()
-    if not sett or not sett.gstin or not sett.registered_address or not sett.bank_account_number:
+    if not sett or not sett.registered_address:
         raise HTTPException(
             status_code=400,
-            detail="Incomplete company invoicing settings. Please configure legal business name, GSTIN, registered address, and bank details in Settings before fulfilling orders.",
+            detail="Incomplete company invoicing settings. Please configure legal business name and registered address in Settings before fulfilling orders.",
         )
-    if not sett.state or not str(sett.state).strip():
-        raise HTTPException(
-            status_code=400,
-            detail="Cannot generate invoice: Tenant registered business state is missing in company settings. Please configure supplier state in Settings.",
-        )
+    if is_india:
+        if not sett.gstin or not sett.bank_account_number:
+            raise HTTPException(
+                status_code=400,
+                detail="Incomplete company invoicing settings. Please configure GSTIN and bank details in Settings before fulfilling orders.",
+            )
+        if not sett.state or not str(sett.state).strip():
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot generate invoice: Tenant registered business state is missing in company settings. Please configure supplier state in Settings.",
+            )
 
-    # 2. Pre-validation: Check Customer Address & Resolve Place of Supply
-    if not so.billing_address and not so.shipping_address:
-        raise HTTPException(
-            status_code=400,
-            detail="Cannot generate invoice: Customer address (billing or shipping) is required before an invoice can be generated.",
-        )
+    # 2. Pre-validation: Customer Address & Place of Supply (India only — GST concept)
+    pos_code, pos_name = None, None
+    if is_india:
+        if not so.billing_address and not so.shipping_address:
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot generate invoice: Customer address (billing or shipping) is required before an invoice can be generated.",
+            )
 
-    pos_code, pos_name = GSTService.resolve_place_of_supply(
-        billing_state=so.billing_state,
-        billing_state_code=so.billing_state_code,
-        billing_address=so.billing_address,
-        shipping_state=so.shipping_state,
-        shipping_state_code=so.shipping_state_code,
-        shipping_address=so.shipping_address,
-        customer_gstin=so.customer_gstin,
-        legacy_state=so.state,
-        legacy_state_code=so.state_code,
-    )
-    if not pos_code or not pos_name:
-        raise HTTPException(
-            status_code=400,
-            detail="Cannot generate invoice: Customer Place of Supply state could not be resolved. Please specify a valid billing or shipping state.",
+        pos_code, pos_name = GSTService.resolve_place_of_supply(
+            billing_state=so.billing_state,
+            billing_state_code=so.billing_state_code,
+            billing_address=so.billing_address,
+            shipping_state=so.shipping_state,
+            shipping_state_code=so.shipping_state_code,
+            shipping_address=so.shipping_address,
+            customer_gstin=so.customer_gstin,
+            legacy_state=so.state,
+            legacy_state_code=so.state_code,
         )
+        if not pos_code or not pos_name:
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot generate invoice: Customer Place of Supply state could not be resolved. Please specify a valid billing or shipping state.",
+            )
 
     # 3. Pre-validation: Check Products Tax Data & Stock
     items_res = await db.execute(select(SalesOrderItem).where(SalesOrderItem.order_id == so.id))
@@ -410,7 +424,7 @@ async def fulfill_sales_order(
         p = p_res.scalar_one_or_none()
         if not p:
             raise HTTPException(status_code=400, detail="Product for line item not found")
-        if not p.hsn_code or not str(p.hsn_code).strip() or p.gst_rate is None:
+        if is_india and (not p.hsn_code or not str(p.hsn_code).strip() or p.gst_rate is None):
             raise HTTPException(
                 status_code=400,
                 detail=f"Cannot fulfill order: SKU '{p.sku}' ({p.name}) is missing required HSN/SAC code or GST rate. Please update product tax data before generating an invoice.",
@@ -476,7 +490,14 @@ async def fulfill_sales_order(
         })
 
     seller_code = sett.state_code or sett.state or "29"
-    tax_calc = GSTService.calculate_invoice_taxes(seller_code, pos_code, calc_items)
+    # Single centralized tax engine: GST (IN) / VAT (EU) / Sales Tax (US)
+    tax_calc = await TaxService.calculate(
+        db,
+        tenant_id=tenant_id,
+        line_items=calc_items,
+        seller_state_code=seller_code,
+        place_of_supply_state_code=pos_code if is_india else None,
+    )
 
     # Resolve company unique_code for MinIO object path
     tenant_res = await db.execute(select(Tenant).where(Tenant.id == tenant_id))
@@ -496,12 +517,12 @@ async def fulfill_sales_order(
         due_date=datetime.utcnow(),
         place_of_supply=tax_calc["place_of_supply"],
         status=InvoiceStatus.ISSUED,
-        seller_legal_name=sett.legal_business_name,
-        seller_gstin=sett.gstin,
-        seller_pan=sett.pan,
-        seller_address=sett.registered_address,
-        seller_state=sett.state,
-        seller_state_code=sett.state_code,
+        seller_legal_name=sett.legal_business_name or "Invenza Enterprise",
+        seller_gstin=sett.gstin or "",
+        seller_pan=sett.pan or "",
+        seller_address=sett.registered_address or "Headquarters",
+        seller_state=sett.state or "Germany",
+        seller_state_code=sett.state_code or "DE",
         customer_name=so.customer_name,
         customer_gstin=so.customer_gstin,
         customer_billing_address=so.billing_address or so.shipping_address or sett.registered_address,
@@ -509,42 +530,55 @@ async def fulfill_sales_order(
         customer_state=tax_calc["customer_state"],
         customer_state_code=tax_calc["customer_state_code"],
         is_inter_state=tax_calc["is_inter_state"],
+        tax_type=tax_calc.get("tax_type", "GST"),
+        currency_code=tax_calc.get("currency_code", "INR"),
         total_taxable_value=tax_calc["total_taxable_value"],
         total_cgst=tax_calc["total_cgst"],
         total_sgst=tax_calc["total_sgst"],
         total_igst=tax_calc["total_igst"],
+        total_single_tax=tax_calc.get("total_single_tax", 0.0),
         round_off=tax_calc["round_off"],
         grand_total=tax_calc["grand_total"],
         grand_total_words=tax_calc["grand_total_words"],
         pdf_storage_key=pdf_key,
         pdf_url=f"/api/v1/invoices/{invoice_id}/pdf",
     )
-    db.add(invoice)
-    await db.flush()
 
-    for cit in tax_calc["items"]:
-        db.add(InvoiceItem(
-            invoice_id=invoice.id,
-            product_id=cit["product_id"],
-            item_description=cit["item_description"],
-            hsn_code=cit["hsn_code"],
-            quantity=cit["quantity"],
-            unit_of_measure=cit["unit_of_measure"],
-            unit_price=cit["unit_price"],
-            discount=cit["discount"],
-            taxable_value=cit["taxable_value"],
-            gst_rate=cit["gst_rate"],
-            cgst_rate=cit["cgst_rate"],
-            cgst_amount=cit["cgst_amount"],
-            sgst_rate=cit["sgst_rate"],
-            sgst_amount=cit["sgst_amount"],
-            igst_rate=cit["igst_rate"],
-            igst_amount=cit["igst_amount"],
-            total=cit["total"],
-        ))
+    try:
+        db.add(invoice)
+        await db.flush()
 
-    so.invoice_id = invoice.id
-    await db.commit()
+        for cit in tax_calc["items"]:
+            db.add(InvoiceItem(
+                invoice_id=invoice.id,
+                product_id=cit["product_id"],
+                item_description=cit["item_description"],
+                hsn_code=cit["hsn_code"],
+                quantity=cit["quantity"],
+                unit_of_measure=cit["unit_of_measure"],
+                unit_price=cit["unit_price"],
+                discount=cit["discount"],
+                taxable_value=cit["taxable_value"],
+                gst_rate=cit["gst_rate"],
+                cgst_rate=cit["cgst_rate"],
+                cgst_amount=cit["cgst_amount"],
+                sgst_rate=cit["sgst_rate"],
+                sgst_amount=cit["sgst_amount"],
+                igst_rate=cit["igst_rate"],
+                igst_amount=cit["igst_amount"],
+                single_tax_rate=cit.get("single_tax_rate", 0.0),
+                single_tax_amount=cit.get("single_tax_amount", 0.0),
+                total=cit["total"],
+            ))
+
+        so.invoice_id = invoice.id
+        await db.commit()
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to record invoice and fulfill order: {str(e)}",
+        )
 
     # 7. Generate & Store Vector PDF in MinIO / Object Storage
     pdf_payload = {
@@ -583,8 +617,9 @@ async def fulfill_sales_order(
     except Exception as e:
         print(f"[Invoice PDF Storage Notice]: {e}")
 
+    inv_type_label = "Tax Invoice" if tax_calc.get("tax_type") != "GST" else "GST Tax Invoice"
     return {
-        "message": f"Sales Order {so.so_number} fulfilled, stock deducted, and GST Tax Invoice {inv_number} issued.",
+        "message": f"Sales Order {so.so_number} fulfilled, stock deducted, and {inv_type_label} {inv_number} issued.",
         "invoice_id": str(invoice.id),
         "invoice_number": inv_number,
         "pdf_url": f"/api/v1/invoices/{invoice.id}/pdf",
@@ -673,17 +708,8 @@ async def download_sales_order_pdf(
         items_res = await db.execute(select(SalesOrderItem).where(SalesOrderItem.order_id == so.id))
         items = items_res.scalars().all()
 
-        seller_code = sett.state_code if sett and sett.state_code else "29"
-        pos_code, pos_name = GSTService.resolve_place_of_supply(
-            billing_state=so.billing_address,
-            billing_state_code=so.state_code,
-            shipping_state=so.shipping_address,
-            customer_gstin=so.customer_gstin,
-            legacy_state=so.state,
-            legacy_state_code=so.state_code,
-        )
-        if not pos_code:
-            pos_code, pos_name = "29", "Karnataka"
+        so_country = (tenant.country_code or "IN").upper() if tenant else "IN"
+        so_is_india = so_country == "IN"
 
         raw_items = []
         for it in items:
@@ -703,7 +729,21 @@ async def download_sales_order_pdf(
                 "gst_rate": float(prod.gst_rate) if prod and prod.gst_rate else 18.0,
             })
 
-        tax_calc = GSTService.calculate_invoice_taxes(seller_code, pos_code, raw_items)
+        if so_is_india:
+            seller_code = sett.state_code if sett and sett.state_code else "29"
+            pos_code, pos_name = GSTService.resolve_place_of_supply(
+                billing_state=so.billing_address,
+                billing_state_code=so.state_code,
+                shipping_state=so.shipping_address,
+                customer_gstin=so.customer_gstin,
+                legacy_state=so.state,
+                legacy_state_code=so.state_code,
+            )
+            if not pos_code:
+                pos_code, pos_name = "29", "Karnataka"
+            tax_calc = GSTService.calculate_invoice_taxes(seller_code, pos_code, raw_items)
+        else:
+            tax_calc = await TaxService.calculate(db, tenant_id=so.tenant_id, line_items=raw_items)
 
         order_dict = {
             "document_title": "SALES ORDER CONFIRMATION",
@@ -715,13 +755,19 @@ async def download_sales_order_pdf(
             "place_of_supply": tax_calc["place_of_supply"],
             "status": so.status.value if hasattr(so.status, "value") else str(so.status),
             "seller_legal_name": sett.legal_business_name if sett else (tenant.name if tenant else "Invenza"),
-            "seller_gstin": sett.gstin if sett and sett.gstin else "29AABCI1234F1Z5",
-            "seller_pan": sett.pan if sett and sett.pan else "AABCI1234F",
+            "seller_gstin": sett.gstin if sett and sett.gstin else ("29AABCI1234F1Z5" if so_is_india else ""),
+            "seller_pan": sett.pan if sett and sett.pan else ("AABCI1234F" if so_is_india else ""),
             "seller_address": sett.registered_address if sett and sett.registered_address else "Outer Ring Road, Bengaluru, Karnataka 560103",
             "seller_state": sett.state if sett and sett.state else "Karnataka",
             "seller_state_code": sett.state_code if sett and sett.state_code else "29",
+            "tax_type": tax_calc.get("tax_type", "GST"),
+            "tax_label": tax_calc.get("tax_label", "GST"),
+            "tax_rate": tax_calc.get("tax_rate"),
+            "currency_code": tax_calc.get("currency_code", "INR"),
+            "currency_symbol": tax_calc.get("currency_symbol", "₹"),
+            "region_display": tax_calc.get("region_display", tax_calc["place_of_supply"]),
             "customer_name": so.customer_name,
-            "customer_gstin": so.customer_gstin or "B2C / Unregistered",
+            "customer_gstin": so.customer_gstin or ("B2C / Unregistered" if so_is_india else ""),
             "customer_billing_address": so.billing_address or "Customer Address",
             "customer_shipping_address": so.shipping_address or so.billing_address or "Delivery Address",
             "customer_state": tax_calc["customer_state"],
@@ -733,17 +779,17 @@ async def download_sales_order_pdf(
             "total_cgst": tax_calc["total_cgst"],
             "total_sgst": tax_calc["total_sgst"],
             "total_igst": tax_calc["total_igst"],
+            "total_single_tax": tax_calc.get("total_single_tax", 0.0),
             "round_off": tax_calc["round_off"],
             "grand_total": tax_calc["grand_total"],
             "grand_total_words": tax_calc["grand_total_words"],
             "so_number": so.so_number,
-            "bank_name": sett.bank_name if sett else "HDFC Bank",
-            "bank_account_number": sett.bank_account_number if sett else "50200012345678",
-            "bank_ifsc_code": sett.bank_ifsc_code if sett else "HDFC0001234",
-            "bank_branch": sett.bank_branch if sett else "Koramangala 5th Block, Bengaluru",
+            "bank_name": sett.bank_name if sett and sett.bank_name else ("HDFC Bank" if so_is_india else ""),
+            "bank_account_number": sett.bank_account_number if sett and sett.bank_account_number else ("50200012345678" if so_is_india else ""),
+            "bank_ifsc_code": sett.bank_ifsc_code if sett and sett.bank_ifsc_code else ("HDFC0001234" if so_is_india else ""),
+            "bank_branch": sett.bank_branch if sett and sett.bank_branch else ("Koramangala 5th Block, Bengaluru" if so_is_india else ""),
             "account_holder_name": sett.account_holder_name if sett else (tenant.name if tenant else "Invenza"),
             "authorized_signatory_name": sett.authorized_signatory_name if sett else "Authorized Signatory",
-            "items": calc_items,
         }
 
         pdf_bytes = InvoicePdfGenerator.generate_invoice_pdf(order_dict)

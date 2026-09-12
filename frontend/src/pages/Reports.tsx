@@ -29,7 +29,7 @@ import {
 export const Reports: React.FC = () => {
   const { theme } = useTheme();
   const isDark = theme === 'dark';
-  const { products, formatCurrency, convertAmount, currency } = useInventory();
+  const { products, formatCurrency, currency } = useInventory();
   const [costingMethod, setCostingMethod] = useState<'fifo' | 'weighted_avg'>('fifo');
   const [reportData, setReportData] = useState<{
     fifo_total_valuation: number;
@@ -55,7 +55,7 @@ export const Reports: React.FC = () => {
 
   // Dynamic valuation based on database report or local inventory state
   const totalValuation = products.reduce(
-    (sum, p) => sum + p.currentStock * convertAmount(p.costPrice, p.currency || currency, currency),
+    (sum, p) => sum + p.currentStock * Number(p.costPrice || 0),
     0
   );
 
@@ -78,7 +78,7 @@ export const Reports: React.FC = () => {
     : Object.entries(
         products.reduce<Record<string, { valuation: number; count: number }>>((acc, p) => {
           if (!acc[p.category]) acc[p.category] = { valuation: 0, count: 0 };
-          const itemCost = convertAmount(p.costPrice, p.currency || currency, currency);
+          const itemCost = Number(p.costPrice || 0);
           acc[p.category].valuation += p.currentStock * itemCost;
           acc[p.category].count += p.currentStock;
           return acc;

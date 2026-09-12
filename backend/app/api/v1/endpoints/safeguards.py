@@ -1,4 +1,5 @@
 import uuid
+import secrets
 from uuid import UUID
 from datetime import datetime
 from typing import List, Optional
@@ -10,7 +11,9 @@ from app.core.database import get_db
 from app.api.deps import require_super_admin
 from app.models.user import User
 from app.models.tenant import Tenant
-from app.models.ledger import StockMovement
+from app.models.product import Product
+from app.models.location import Location
+from app.models.ledger import StockMovement, MovementTypeEnum
 from app.models.security_request import SecurityApprovalRequest
 from app.models.audit_log import AuditLog
 from app.services.email_service import EmailService
@@ -128,6 +131,34 @@ async def approve_security_request(
         # Execute ledger purge for tenant
         await db.execute(delete(StockMovement).where(StockMovement.tenant_id == req.tenant_id))
 
+        # Add root audit record documenting authorized purge
+        loc_res = await db.execute(
+            select(Location).where(and_(Location.tenant_id == req.tenant_id, Location.is_active == True)).limit(1)
+        )
+        loc = loc_res.scalar_one_or_none()
+        prod_res = await db.execute(select(Product).where(Product.tenant_id == req.tenant_id).limit(1))
+        prod = prod_res.scalar_one_or_none()
+
+        if loc and prod:
+            root_audit_entry = StockMovement(
+                id=secrets.token_hex(16),
+                tenant_id=req.tenant_id,
+                product_id=prod.id,
+                location_id=loc.id,
+                movement_type=MovementTypeEnum.ADJUST,
+                quantity=0.0,
+                unit_cost=0.0,
+                reference_type="AUDIT_PURGE",
+                reference_id=req.target_id or str(req.id),
+                reason_code="ledger purged with super admin approval",
+                performed_by=(
+                    f"Requested by: {req.requester_name} ({req.requester_email}) [MFA Verified] | "
+                    f"Approved & Executed by: {admin.full_name or admin.email}"
+                ),
+                timestamp=datetime.utcnow(),
+            )
+            db.add(root_audit_entry)
+
     elif req.action_type == "deactivate_tenant":
         tenant_res = await db.execute(select(Tenant).where(Tenant.id == req.tenant_id))
         tenant = tenant_res.scalar_one_or_none()
@@ -151,6 +182,20 @@ async def approve_security_request(
 
     await db.commit()
     await db.refresh(req)
+
+    # Dispatch notification to requester
+    try:
+        if req.requester_email:
+            await EmailService.send_email_async(
+                recipient=req.requester_email,
+                subject=f"APPROVED: Dual-Authorization Request - {req.action_type.replace('_', ' ').title()}",
+                body_text=f"Your request for {req.action_type.replace('_', ' ').title()} has been approved and executed by Super Administrator ({admin.full_name or admin.email}).",
+                body_html=f"<p>Hello {req.requester_name},</p><p>Your dual-authorization request for <strong>{req.action_type.replace('_', ' ').title()}</strong> on organization <strong>{req.tenant_name}</strong> has been approved and executed by the Super Administrator.</p>",
+                metadata={"action": req.action_type, "status": "approved", "request_id": str(req.id)},
+            )
+    except Exception as e:
+        print(f"[Safeguard Approval Email Notice Error]: {e}")
+
     return req
 
 @router.post("/queue/{request_id}/reject", response_model=SecurityApprovalRequestResponse)
@@ -192,6 +237,20 @@ async def reject_security_request(
 
     await db.commit()
     await db.refresh(req)
+
+    # Dispatch notification to requester
+    try:
+        if req.requester_email:
+            await EmailService.send_email_async(
+                recipient=req.requester_email,
+                subject=f"REJECTED: Dual-Authorization Request - {req.action_type.replace('_', ' ').title()}",
+                body_text=f"Your request for {req.action_type.replace('_', ' ').title()} has been rejected by Super Administrator. Reason: {req.rejection_reason}",
+                body_html=f"<p>Hello {req.requester_name},</p><p>Your dual-authorization request for <strong>{req.action_type.replace('_', ' ').title()}</strong> on organization <strong>{req.tenant_name}</strong> was rejected by the Super Administrator.</p><p><strong>Reason:</strong> {req.rejection_reason}</p>",
+                metadata={"action": req.action_type, "status": "rejected", "request_id": str(req.id)},
+            )
+    except Exception as e:
+        print(f"[Safeguard Rejection Email Notice Error]: {e}")
+
     return req
 
 @router.get("/audit-logs", response_model=List[AuditLogResponse])

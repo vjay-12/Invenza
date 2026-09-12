@@ -46,6 +46,12 @@ class Token(BaseModel):
     industry: Optional[str] = None
     enabled_modules: List[str] = Field(default_factory=list)
     permissions: List[str] = Field(default_factory=list)
+    currency_code: str = "INR"  # tenant-derived, locked
+    country_code: str = "IN"    # tenant-derived, locked
+    state: Optional[str] = None
+    tax_type: str = "GST"
+    tax_rate: Optional[float] = None
+    tax_label: str = "GST"
 
 class UserResponse(UserBase):
     id: UUID

@@ -15,6 +15,7 @@ from app.models.email_change import EmailChangeRequest
 from app.models.audit_log import AuditLog
 from app.models.security_request import SecurityApprovalRequest
 from app.models.billing import TenantBillingProfile, BillingFeeHistory, BillingPaymentRecord, OrgSetupFee, OrgMaintenancePlan, OrgMaintenanceCycle, VALID_PAYMENT_MODES
+from app.models.tax_reference import TaxReference
 
 __all__ = [
     "Base",
@@ -53,4 +54,5 @@ __all__ = [
     "OrgMaintenancePlan",
     "OrgMaintenanceCycle",
     "VALID_PAYMENT_MODES",
+    "TaxReference",
 ]

@@ -767,7 +767,7 @@ Invenza Identity & Access Management
     # ═════════════════════════════════════════════════════════════════════════════
 
     @classmethod
-    def send_password_reset_otp(
+    async def send_password_reset_otp(
         cls,
         recipient_email: str,
         otp_code: str,
@@ -828,14 +828,12 @@ Invenza Security & Authentication Team
             signoff_team="Invenza Security & Authentication Team",
         )
 
-        return asyncio.create_task(
-            cls.send_email_async(
-                recipient=recipient_email,
-                subject=subject,
-                body_text=body_text,
-                body_html=body_html,
-                metadata={"type": "password_reset_otp", "expires_in_minutes": ttl_minutes},
-            )
+        return await cls.send_email_async(
+            recipient=recipient_email,
+            subject=subject,
+            body_text=body_text,
+            body_html=body_html,
+            metadata={"type": "password_reset_otp", "expires_in_minutes": ttl_minutes},
         )
 
     # ═════════════════════════════════════════════════════════════════════════════
@@ -1236,15 +1234,38 @@ Invenza Data Protection Desk
         place_of_supply: str,
         invoice_id: str,
         pdf_download_url: Optional[str] = None,
+        single_tax: float = 0.0,
+        tax_type: str = "GST",
+        tax_label: str = "GST",
+        currency_code: str = "INR",
+        currency_symbol: str = "₹",
     ) -> Dict[str, Any]:
-        """Dispatches an official GST Tax Invoice and payment receipt to the organization's commercial contact."""
+        """Dispatches an official Tax Invoice and payment receipt (GST / VAT / Sales Tax aware)."""
         subject = f"Official Tax Invoice & Payment Receipt: {invoice_number} - {company_name}"
-        preheader = f"Payment confirmation and GST Tax Invoice {invoice_number} for {company_name} (INR {grand_total:,.2f})."
+        preheader = f"Payment confirmation and {tax_label} Tax Invoice {invoice_number} for {company_name} ({currency_code} {grand_total:,.2f})."
 
         download_link = pdf_download_url or f"http://localhost:8000/api/v1/billing/setup-fee/{invoice_id}/invoice-pdf"
 
+        region_label = "Place of Supply" if tax_type == "GST" else "Tax Region"
+
+        if tax_type == "GST":
+            breakdown_lines = (
+                f"- CGST: {currency_code} {cgst:,.2f}\n"
+                f"- SGST: {currency_code} {sgst:,.2f}\n"
+                f"- IGST: {currency_code} {igst:,.2f}"
+            )
+            card_tax_rows = [
+                ("CGST (Intrastate)", f"{currency_code} {cgst:,.2f}"),
+                ("SGST (Intrastate)", f"{currency_code} {sgst:,.2f}"),
+                ("IGST (Interstate)", f"{currency_code} {igst:,.2f}"),
+            ]
+        else:
+            zero_note = " (0% - No state sales tax)" if (tax_type == "SALES_TAX" and single_tax == 0) else ""
+            breakdown_lines = f"- {tax_label}{zero_note}: {currency_code} {single_tax:,.2f}"
+            card_tax_rows = [(f"{tax_label}{zero_note}", f"{currency_code} {single_tax:,.2f}")]
+
         body_text = f"""
-OFFICIAL GST TAX INVOICE & PAYMENT RECEIPT
+OFFICIAL {tax_label.upper()} TAX INVOICE & PAYMENT RECEIPT
 ==========================================
 Dear {recipient_name},
 
@@ -1254,14 +1275,12 @@ INVOICE SUMMARY:
 - Invoice Number: {invoice_number}
 - Billed Organization: {company_name}
 - Payment Mode: {payment_mode}
-- Place of Supply: {place_of_supply}
+- {region_label}: {place_of_supply}
 
 FINANCIAL BREAKDOWN:
-- Taxable Value: INR {taxable_value:,.2f}
-- CGST: INR {cgst:,.2f}
-- SGST: INR {sgst:,.2f}
-- IGST: INR {igst:,.2f}
-- Grand Total: INR {grand_total:,.2f}
+- Taxable Value: {currency_code} {taxable_value:,.2f}
+{breakdown_lines}
+- Grand Total: {currency_code} {grand_total:,.2f}
 
 Download Official PDF Invoice:
 {download_link}
@@ -1270,26 +1289,24 @@ Sincerely,
 Invenza Commercial Billing Team
         """
 
-        card = cls._render_card("GST Tax Invoice Breakdown", [
+        card = cls._render_card(f"{tax_label} Tax Invoice Breakdown", [
             ("Invoice Number", invoice_number),
             ("Billed Organization", company_name),
             ("Payment Mode", payment_mode),
-            ("Place of Supply", place_of_supply),
-            ("Taxable Value", f"INR {taxable_value:,.2f}"),
-            ("CGST (Intrastate)", f"INR {cgst:,.2f}"),
-            ("SGST (Intrastate)", f"INR {sgst:,.2f}"),
-            ("IGST (Interstate)", f"INR {igst:,.2f}"),
-            ("Total Amount Paid", f"INR {grand_total:,.2f}"),
+            (region_label, place_of_supply),
+            ("Taxable Value", f"{currency_code} {taxable_value:,.2f}"),
+            *card_tax_rows,
+            ("Total Amount Paid", f"{currency_code} {grand_total:,.2f}"),
         ])
 
         advisory = cls._render_advisory(
-            "This electronic receipt constitutes an official GST-compliant tax document issued under Hapkonic Technologies Private Limited. Retain for commercial and tax audit records.",
+            "This electronic receipt constitutes an official tax-compliant commercial document issued by Invenza. Retain for commercial and tax audit records.",
             severity="info"
         )
 
         intro_html = f"""
-        Thank you for your payment. This official correspondence confirms receipt of payment for commercial platform services for <strong>{company_name}</strong>. 
-        Your GST tax breakdown and invoice specifics are summarized below:
+        Thank you for your payment. This official correspondence confirms receipt of payment for commercial platform services for <strong>{company_name}</strong>.
+        Your {tax_label} tax breakdown and invoice specifics are summarized below:
         """
 
         body_html = cls._render_master_layout(
@@ -1313,7 +1330,7 @@ Invenza Commercial Billing Team
             subject=subject,
             body_text=body_text,
             body_html=body_html,
-            metadata={"invoice_number": invoice_number, "company_name": company_name, "type": "billing_tax_invoice"},
+            metadata={"invoice_number": invoice_number, "company_name": company_name, "type": "billing_tax_invoice", "tax_type": tax_type, "currency_code": currency_code},
         )
 
     # ═════════════════════════════════════════════════════════════════════════════
@@ -1330,6 +1347,8 @@ Invenza Commercial Billing Team
         amount_due: float,
         due_date: str,
         portal_url: str = "http://localhost:5173/billing",
+        tax_label: str = "GST",
+        currency_code: str = "INR",
     ) -> Dict[str, Any]:
         """Dispatches an official maintenance cycle billing notice/reminder to the organization administrator."""
         subject = f"Commercial Notice: Maintenance Cycle Due - {cycle_month} - {company_name}"
@@ -1345,7 +1364,7 @@ This communication serves as an official billing reminder regarding the monthly 
 CYCLE DETAILS:
 - Billed Entity: {company_name}
 - Billing Cycle: {cycle_month}
-- Amount Payable: INR {amount_due:,.2f} (+ applicable GST)
+- Amount Payable: {currency_code} {amount_due:,.2f} (+ applicable {tax_label})
 - Payment Due Date: {due_date}
 - Status: Pending Settlement
 
@@ -1365,8 +1384,8 @@ Invenza Commercial Billing Team
         card1 = cls._render_card("Maintenance Cycle Details", [
             ("Organization", company_name),
             ("Billing Cycle", cycle_month),
-            ("Base Amount Due", f"INR {amount_due:,.2f}"),
-            ("Applicable Taxes", "GST as applicable by Place of Supply"),
+            ("Base Amount Due", f"{currency_code} {amount_due:,.2f}"),
+            ("Applicable Taxes", f"{tax_label} as applicable by region"),
             ("Due Date", due_date),
             ("Current Status", "Pending Settlement"),
         ])

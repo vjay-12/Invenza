@@ -31,6 +31,11 @@
 | **Authentication** | JWT Bearer Tokens with tenant scoping & RBAC (`Admin`, `Staff`, `Viewer`) |
 | **Containerization** | Docker + Docker Compose |
 
+> **Multi-region tax:** GST (India) / VAT (EU) / Sales Tax (US) with INR/EUR/USD
+> billing is configured via the `tax_reference` table — see
+> [docs/TAX_REFERENCE.md](docs/TAX_REFERENCE.md) for rates, re-verification
+> requirements, and how to add countries/states without code changes.
+
 ---
 
 ## 🏃 Quick Start (Local Development)

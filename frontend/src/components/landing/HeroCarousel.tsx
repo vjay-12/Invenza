@@ -153,9 +153,9 @@ export const HeroCarousel: React.FC<HeroCarouselProps> = ({ intervalMs = 4200 })
       onTouchEnd={handleTouchEnd}
     >
       {/* Main architectural frame */}
-      <div className="relative rounded-2xl lg:rounded-3xl border border-slate-700/60 bg-[#090E17]/95 p-2 sm:p-2.5 shadow-2xl shadow-slate-950/80">
+      <div className="relative rounded-2xl lg:rounded-3xl border border-slate-200/90 dark:border-slate-700/60 bg-white/95 dark:bg-[#090E17]/95 p-2 sm:p-2.5 shadow-xl shadow-slate-200/70 dark:shadow-2xl dark:shadow-slate-950/80 transition-all backdrop-blur-sm">
         {/* Inner viewport with 16:10 aspect ratio */}
-        <div className="relative w-full aspect-[16/10.5] sm:aspect-[16/10] rounded-xl lg:rounded-2xl overflow-hidden bg-[#0C1017]">
+        <div className="relative w-full aspect-[16/10.5] sm:aspect-[16/10] rounded-xl lg:rounded-2xl overflow-hidden bg-slate-100 dark:bg-[#0C1017] border border-slate-200/70 dark:border-slate-800/80">
           {/* Slides stack */}
           {HERO_SLIDES.map((slide, idx) => {
             const isActive = idx === currentIndex;
@@ -177,40 +177,40 @@ export const HeroCarousel: React.FC<HeroCarouselProps> = ({ intervalMs = 4200 })
                 />
 
                 {/* Subtle vignette layer */}
-                <div className="absolute inset-0 bg-gradient-to-b from-black/40 via-transparent to-black/80 pointer-events-none" />
+                <div className="absolute inset-0 bg-gradient-to-b from-black/20 via-transparent to-black/70 dark:from-black/40 dark:via-transparent dark:to-black/80 pointer-events-none" />
               </div>
             );
           })}
 
           {/* Top Info Badges */}
           <div className="absolute top-3 inset-x-3 z-20 flex items-center justify-between pointer-events-none">
-            <div className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded border border-slate-700 bg-[#090E17]/90 text-[10px] font-mono font-medium text-teal-300">
-              <span className="w-1.5 h-1.5 rounded-sm bg-teal-400 shrink-0" />
+            <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border border-slate-200/90 dark:border-slate-700 bg-white/95 dark:bg-[#090E17]/90 text-[10px] font-mono font-semibold text-teal-700 dark:text-teal-300 shadow-sm backdrop-blur-md">
+              <span className="w-1.5 h-1.5 rounded-sm bg-teal-500 dark:bg-teal-400 shrink-0" />
               <span className="truncate">{currentSlide.tag}</span>
             </div>
 
             <div className="flex items-center gap-1.5">
               {isPaused && (
-                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-slate-700 bg-slate-900/90 text-[10px] text-amber-300 font-mono">
+                <span className="inline-flex items-center gap-1 px-2 py-1 rounded-md border border-amber-300 dark:border-slate-700 bg-amber-50/95 dark:bg-slate-900/90 text-[10px] text-amber-800 dark:text-amber-300 font-mono shadow-sm backdrop-blur-md">
                   <Pause className="w-2.5 h-2.5" />
                   <span>Paused</span>
                 </span>
               )}
-              <span className="px-1.5 py-0.5 rounded border border-slate-700 bg-[#090E17]/90 text-[10px] font-mono font-bold text-slate-300">
+              <span className="px-2 py-1 rounded-md border border-slate-200/90 dark:border-slate-700 bg-white/95 dark:bg-[#090E17]/90 text-[10px] font-mono font-bold text-slate-700 dark:text-slate-300 shadow-sm backdrop-blur-md">
                 {String(currentIndex + 1).padStart(2, '0')} / {String(HERO_SLIDES.length).padStart(2, '0')}
               </span>
             </div>
           </div>
 
           {/* Bottom Gradient Scrim & Captions */}
-          <div className="absolute bottom-0 inset-x-0 z-20 p-3.5 sm:p-4 bg-gradient-to-t from-[#090E17] via-[#090E17]/85 to-transparent pt-8 pointer-events-none">
-            <div className="text-[10px] sm:text-[11px] font-bold uppercase tracking-wider text-teal-400 font-mono mb-0.5">
+          <div className="absolute bottom-0 inset-x-0 z-20 p-3.5 sm:p-4 bg-gradient-to-t from-slate-950/95 via-slate-950/70 to-transparent dark:from-[#090E17] dark:via-[#090E17]/85 dark:to-transparent pt-10 pointer-events-none">
+            <div className="text-[10px] sm:text-[11px] font-bold uppercase tracking-wider text-teal-300 dark:text-teal-400 font-mono mb-0.5">
               {currentSlide.category}
             </div>
             <h3 className="text-sm sm:text-base font-bold text-white tracking-tight leading-snug drop-shadow-sm">
               {currentSlide.title}
             </h3>
-            <p className="text-[11px] sm:text-xs text-slate-300/90 leading-normal mt-0.5 line-clamp-1">
+            <p className="text-[11px] sm:text-xs text-slate-200 dark:text-slate-300/90 leading-normal mt-0.5 line-clamp-1">
               {currentSlide.description}
             </p>
           </div>
@@ -220,7 +220,7 @@ export const HeroCarousel: React.FC<HeroCarouselProps> = ({ intervalMs = 4200 })
             type="button"
             onClick={prevSlide}
             aria-label="Previous slide"
-            className="absolute left-2 top-1/2 -translate-y-1/2 z-30 p-1.5 rounded-lg bg-[#090E17]/90 hover:bg-[#090E17] text-white/70 hover:text-white border border-slate-700 opacity-0 group-hover:opacity-100 transition-all duration-200 shadow-md active:scale-95"
+            className="absolute left-2.5 top-1/2 -translate-y-1/2 z-30 p-2 rounded-xl bg-white/90 hover:bg-white text-slate-700 hover:text-slate-950 border border-slate-200/90 shadow-md dark:bg-[#090E17]/90 dark:hover:bg-[#090E17] dark:text-white/70 dark:hover:text-white dark:border-slate-700 opacity-0 group-hover:opacity-100 transition-all duration-200 active:scale-95 cursor-pointer backdrop-blur-sm"
           >
             <ChevronLeft className="w-4 h-4" />
           </button>
@@ -228,13 +228,13 @@ export const HeroCarousel: React.FC<HeroCarouselProps> = ({ intervalMs = 4200 })
             type="button"
             onClick={nextSlide}
             aria-label="Next slide"
-            className="absolute right-2 top-1/2 -translate-y-1/2 z-30 p-1.5 rounded-lg bg-[#090E17]/90 hover:bg-[#090E17] text-white/70 hover:text-white border border-slate-700 opacity-0 group-hover:opacity-100 transition-all duration-200 shadow-md active:scale-95"
+            className="absolute right-2.5 top-1/2 -translate-y-1/2 z-30 p-2 rounded-xl bg-white/90 hover:bg-white text-slate-700 hover:text-slate-950 border border-slate-200/90 shadow-md dark:bg-[#090E17]/90 dark:hover:bg-[#090E17] dark:text-white/70 dark:hover:text-white dark:border-slate-700 opacity-0 group-hover:opacity-100 transition-all duration-200 active:scale-95 cursor-pointer backdrop-blur-sm"
           >
             <ChevronRight className="w-4 h-4" />
           </button>
 
           {/* Subtle auto-scroll countdown progress bar along the very bottom of viewport */}
-          <div className="absolute bottom-0 inset-x-0 h-0.5 bg-slate-800/80 z-30">
+          <div className="absolute bottom-0 inset-x-0 h-0.5 bg-slate-300/80 dark:bg-slate-800/80 z-30">
             <div
               className="h-full bg-teal-500 transition-all duration-100 ease-linear"
               style={{ width: `${progress}%` }}
@@ -254,10 +254,10 @@ export const HeroCarousel: React.FC<HeroCarouselProps> = ({ intervalMs = 4200 })
                   type="button"
                   onClick={() => goToSlide(idx)}
                   aria-label={`Go to slide ${idx + 1}: ${slide.title}`}
-                  className={`h-1.5 rounded-full transition-all duration-300 ${
+                  className={`h-1.5 rounded-full transition-all duration-300 cursor-pointer ${
                     isActive
-                      ? 'w-6 bg-teal-400 shadow-sm shadow-teal-400/50'
-                      : 'w-1.5 bg-slate-700 hover:bg-slate-500'
+                      ? 'w-6 bg-teal-600 dark:bg-teal-400 shadow-sm shadow-teal-600/30 dark:shadow-teal-400/50'
+                      : 'w-1.5 bg-slate-300 hover:bg-slate-400 dark:bg-slate-700 dark:hover:bg-slate-500'
                   }`}
                 />
               );
@@ -265,8 +265,8 @@ export const HeroCarousel: React.FC<HeroCarouselProps> = ({ intervalMs = 4200 })
           </div>
 
           {/* Auto-scroll Status Hint */}
-          <div className="flex items-center gap-1.5 text-[10px] text-slate-400 font-mono">
-            <span className="w-1.5 h-1.5 rounded-full bg-teal-400/80" />
+          <div className="flex items-center gap-1.5 text-[10px] text-slate-500 dark:text-slate-400 font-mono">
+            <span className="w-1.5 h-1.5 rounded-full bg-teal-500 dark:bg-teal-400/80" />
             <span>Auto-rotating &bull; Hover to pause</span>
           </div>
         </div>

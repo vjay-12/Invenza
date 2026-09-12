@@ -126,7 +126,7 @@ export const api = {
     location: string;
     state?: string;
     pincode?: string;
-    currency_code: string;
+    country_code: string;
     tier?: string;
     tags?: string[];
     lead_id?: string;
@@ -707,6 +707,14 @@ export const api = {
   },
   voidInvoice: async (invoiceId: string) =>
     fetchWithFallback<any>(`/invoices/${invoiceId}/void`, { method: 'POST' }),
+  markInvoicePaid: async (
+    invoiceId: string,
+    paymentData?: { payment_method?: string; payment_reference?: string; paid_at?: string }
+  ) =>
+    fetchWithFallback<any>(`/invoices/${invoiceId}/pay`, {
+      method: 'POST',
+      body: paymentData ? JSON.stringify(paymentData) : undefined,
+    }),
   getTenantInvoicingSettings: async () => fetchWithFallback<any>('/invoices/settings/company'),
   updateTenantInvoicingSettings: async (data: any) =>
     fetchWithFallback<any>('/invoices/settings/company', {

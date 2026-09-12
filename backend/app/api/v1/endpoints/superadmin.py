@@ -29,6 +29,14 @@ from app.schemas.tenant import (
 from app.schemas.lead import LeadInquiryResponse, LeadInquiryStatusUpdate
 from app.services.email_service import EmailService
 from app.services.gst_service import GSTService
+from app.services.tax_service import (
+    derive_currency,
+    resolve_org_state,
+    resolve_us_state,
+    country_name,
+    currency_symbol,
+    TaxReference,
+)
 
 router = APIRouter()
 
@@ -89,6 +97,7 @@ async def list_companies(
                 location=t.location or "Headquarters",
                 state=getattr(t, "state", None),
                 pincode=getattr(t, "pincode", None),
+                country_code=t.country_code or "IN",
                 currency_code=t.currency_code or "INR",
                 tier=getattr(t, "tier", "Growth Suite") or "Growth Suite",
                 tags=getattr(t, "tags", []) or [],
@@ -156,20 +165,43 @@ async def provision_company(
         comp_code = f"{base_code[:6]}{c_counter:02d}"
         c_counter += 1
 
-    # 2c. Look up Lead Inquiry if converted, resolve state and pincode
+    # 2c. Look up Lead Inquiry if converted, resolve country/state/pincode
     lead_obj = None
     if company_in.lead_id:
         lead_res = await db.execute(select(LeadInquiry).where(LeadInquiry.id == company_in.lead_id))
         lead_obj = lead_res.scalar_one_or_none()
 
-    state_input = company_in.state or (lead_obj.state if lead_obj else None) or company_in.location
-    pincode_input = (company_in.pincode or (lead_obj.pincode if lead_obj else None) or "560103").strip()
+    country_code = (company_in.country_code or "IN").upper().strip()
+    # Country must be India or present in the Tax Reference table (data-driven extensibility)
+    if country_code != "IN":
+        cc_res = await db.execute(select(TaxReference.country_code).where(TaxReference.country_code == country_code).limit(1))
+        if not cc_res.first():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Country '{country_code}' is not provisionable. Use IN or a country present in the Tax Reference table.",
+            )
+    # Currency is ALWAYS derived from country (IN->INR, EU->EUR, US->USD); client-sent value is ignored.
+    currency_code = derive_currency(country_code)
 
-    init_state_code, init_state_name = GSTService.normalize_state_code(state_input)
-    if not init_state_code:
-        init_state_code, init_state_name = GSTService.normalize_state_code(company_in.location)
-    if not init_state_code:
-        init_state_code, init_state_name = "29", "Karnataka"
+    state_input = company_in.state or (lead_obj.state if lead_obj else None)
+    pincode_input = (company_in.pincode or (lead_obj.pincode if lead_obj else None) or "").strip() or None
+
+    if country_code == "US":
+        init_state_code, init_state_name = resolve_us_state(state_input)
+        if not init_state_code:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="A valid US state is required when Country = United States.",
+            )
+        region_label = init_state_name
+    elif country_code == "IN":
+        init_state_code, init_state_name = GSTService.normalize_state_code(state_input or company_in.location)
+        if not init_state_code:
+            init_state_code, init_state_name = "29", "Karnataka"
+        region_label = init_state_name
+    else:  # EU: no state level — the country itself is the tax region
+        init_state_code, init_state_name = country_code, country_name(country_code)
+        region_label = country_name(country_code)
 
     # 3. Create Tenant with brand new UUID and clean slate
     new_tenant_id = uuid.uuid4()
@@ -186,9 +218,10 @@ async def provision_company(
         unique_code=comp_code,
         industry=company_in.industry.strip(),
         location=company_in.location.strip(),
-        state=init_state_name,
+        state=init_state_name if country_code in ("IN", "US") else None,
         pincode=pincode_input,
-        currency_code=company_in.currency_code.upper().strip(),
+        country_code=country_code,
+        currency_code=currency_code,
         tier=tier_val,
         tags=tags_val,
         enabled_modules=company_in.enabled_modules,
@@ -219,17 +252,21 @@ async def provision_company(
     db.add(admin_user)
 
     # 5. Initialize legal settings and invoice sequence for new tenant
-    reg_addr = f"{company_in.location.strip()}, {init_state_name} - {pincode_input}"
+    reg_addr = f"{company_in.location.strip()}, {region_label}" + (f" - {pincode_input}" if pincode_input else "")
     tenant_settings = TenantSettings(
         tenant_id=new_tenant_id,
         legal_business_name=company_in.company_name.strip(),
         gstin="",
+        pan="" if country_code != "IN" else "AABCI1234F",
         registered_address=reg_addr,
-        state=init_state_name,
+        state=region_label,
         state_code=init_state_code,
-        pincode=pincode_input,
+        pincode=pincode_input or "",
         authorized_signatory_name=company_in.admin_full_name.strip(),
         invoice_prefix="INV",
+        # Non-Indian orgs must not inherit the Indian placeholder bank profile
+        **({"bank_name": "", "bank_account_number": "", "bank_ifsc_code": "",
+            "bank_branch": "", "account_holder_name": ""} if country_code != "IN" else {}),
     )
     db.add(tenant_settings)
 
@@ -293,12 +330,13 @@ async def provision_company(
         setup_fee_payment_mode=None,
         setup_fee_recorded_by=actor.full_name or actor.email,
         monthly_maintenance_fee=maintenance_rate,
-        maintenance_currency="INR",
+        maintenance_currency=currency_code,
         billing_cycle_day=1,
     )
     db.add(billing_prof)
 
     # 5d. Record Security Safeguards Audit Log
+    cur_sym = currency_symbol(currency_code)
     audit_entry = AuditLog(
         actor_id=actor.id,
         actor_name=actor.full_name or "Super Admin",
@@ -308,7 +346,7 @@ async def provision_company(
         action_type="company_provisioned",
         target_type="tenant",
         target_id=str(new_tenant_id),
-        description=f"Provisioned organization '{new_tenant.name}' with admin {email_clean}, setup fee ₹{setup_amount:,.2f}, and monthly rate ₹{maintenance_rate:,.2f}",
+        description=f"Provisioned organization '{new_tenant.name}' ({country_code}/{currency_code}) with admin {email_clean}, setup fee {cur_sym}{setup_amount:,.2f}, and monthly rate {cur_sym}{maintenance_rate:,.2f}",
         after_values={
             "name": new_tenant.name,
             "company_code": new_tenant.company_code,
@@ -317,6 +355,8 @@ async def provision_company(
             "admin_email": email_clean,
             "setup_fee": setup_amount,
             "monthly_maintenance_fee": maintenance_rate,
+            "country_code": country_code,
+            "currency_code": currency_code,
             "lead_id": str(company_in.lead_id) if company_in.lead_id else None,
         },
     )
@@ -348,6 +388,7 @@ async def provision_company(
         location=new_tenant.location,
         state=new_tenant.state,
         pincode=new_tenant.pincode,
+        country_code=new_tenant.country_code or "IN",
         currency_code=new_tenant.currency_code,
         tier=new_tenant.tier,
         tags=new_tenant.tags,
@@ -399,30 +440,38 @@ async def update_company(
         tenant.industry = company_update.industry.strip()
     if company_update.location is not None:
         tenant.location = company_update.location.strip()
-    if company_update.state is not None:
-        tenant.state = company_update.state.strip()
+
+    # Country / State / Currency are LOCKED after provisioning (tax + billing identity).
+    # Reject change attempts explicitly rather than silently ignoring them.
+    if company_update.country_code is not None and company_update.country_code.upper().strip() != (tenant.country_code or "IN"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Country is locked after provisioning and cannot be changed.",
+        )
+    if company_update.state is not None and company_update.state.strip() != (tenant.state or ""):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="State is locked after provisioning and cannot be changed.",
+        )
+    if company_update.currency_code is not None and company_update.currency_code.upper().strip() != (tenant.currency_code or "INR"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Currency is locked after provisioning and cannot be changed.",
+        )
     if company_update.pincode is not None:
         tenant.pincode = company_update.pincode.strip()
 
-    # Sync state and pincode to TenantSettings if updated
-    if company_update.state is not None or company_update.pincode is not None or company_update.location is not None:
+    # Sync pincode to TenantSettings if updated
+    if company_update.pincode is not None or company_update.location is not None:
         t_sett_res = await db.execute(select(TenantSettings).where(TenantSettings.tenant_id == tenant.id))
         t_sett = t_sett_res.scalar_one_or_none()
         if t_sett:
-            if company_update.state is not None:
-                c, n = GSTService.normalize_state_code(company_update.state)
-                if c and n:
-                    t_sett.state_code = c
-                    t_sett.state = n
             if company_update.pincode is not None:
                 t_sett.pincode = company_update.pincode.strip()
             loc_val = tenant.location or "Headquarters"
             st_val = t_sett.state or "Karnataka"
             pin_val = t_sett.pincode or "560103"
             t_sett.registered_address = f"{loc_val}, {st_val} - {pin_val}"
-
-    if company_update.currency_code is not None:
-        tenant.currency_code = company_update.currency_code.upper().strip()
     if company_update.tier is not None:
         tenant.tier = company_update.tier.strip()
     if company_update.tags is not None:
@@ -478,6 +527,7 @@ async def update_company(
         location=tenant.location,
         state=tenant.state,
         pincode=tenant.pincode,
+        country_code=tenant.country_code or "IN",
         currency_code=tenant.currency_code,
         tier=tenant.tier,
         tags=tenant.tags,

@@ -363,8 +363,8 @@ export const RoleManagement: React.FC<RoleManagementProps> = ({ onNavigate }) =>
         <div
           className={`fixed top-5 right-5 z-50 px-4 py-3 rounded-xl shadow-2xl flex items-center gap-3 border text-sm font-semibold animate-in slide-in-from-top duration-200 ${
             toastMessage.type === 'success'
-              ? 'bg-emerald-950/90 border-emerald-500/40 text-emerald-300 backdrop-blur-xl'
-              : 'bg-rose-950/90 border-rose-500/40 text-rose-300 backdrop-blur-xl'
+              ? 'bg-emerald-50 border-emerald-300 text-emerald-700 dark:bg-emerald-950/90 dark:border-emerald-500/40 dark:text-emerald-300 backdrop-blur-xl'
+              : 'bg-rose-50 border-rose-300 text-rose-700 dark:bg-rose-950/90 dark:border-rose-500/40 dark:text-rose-300 backdrop-blur-xl'
           }`}
         >
           {toastMessage.type === 'success' ? (

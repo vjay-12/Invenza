@@ -17,12 +17,12 @@ class TenantSettings(Base):
 
     tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id", ondelete="CASCADE"), primary_key=True)
     legal_business_name = Column(String(255), nullable=False, default="Invenza Enterprise Ltd")
-    gstin = Column(String(15), nullable=False, default="29AABCI1234F1Z5")
-    pan = Column(String(10), nullable=False, default="AABCI1234F")
+    gstin = Column(String(50), nullable=False, default="")
+    pan = Column(String(50), nullable=False, default="")
     registered_address = Column(Text, nullable=False, default="Plot 42, Tech Park Central, Outer Ring Road, Bengaluru, Karnataka 560103")
     state = Column(String(100), nullable=False, default="Karnataka")
-    state_code = Column(String(2), nullable=False, default="29")
-    pincode = Column(String(10), nullable=True, default="560103")
+    state_code = Column(String(10), nullable=False, default="29")
+    pincode = Column(String(20), nullable=True, default="560103")
     logo_url = Column(String(500), nullable=True)
     authorized_signatory_name = Column(String(255), nullable=False, default="Vijay B")
     signature_url = Column(String(500), nullable=True)
@@ -52,15 +52,15 @@ class Customer(Base):
     legal_name = Column(String(255), nullable=False)
     email = Column(String(255), nullable=True)
     phone = Column(String(50), nullable=True)
-    gstin = Column(String(15), nullable=True)  # Optional for unregistered/consumer
+    gstin = Column(String(50), nullable=True)  # Optional for unregistered/consumer
     billing_address = Column(Text, nullable=False)
     billing_state = Column(String(100), nullable=True, default="Karnataka")
-    billing_state_code = Column(String(2), nullable=True, default="29")
+    billing_state_code = Column(String(10), nullable=True, default="29")
     shipping_address = Column(Text, nullable=False)
     shipping_state = Column(String(100), nullable=True)
-    shipping_state_code = Column(String(2), nullable=True)
+    shipping_state_code = Column(String(10), nullable=True)
     state = Column(String(100), nullable=False, default="Karnataka")
-    state_code = Column(String(2), nullable=False, default="29")
+    state_code = Column(String(10), nullable=False, default="29")
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
@@ -78,23 +78,28 @@ class Invoice(Base):
 
     # Seller Snapshot at time of generation
     seller_legal_name = Column(String(255), nullable=False)
-    seller_gstin = Column(String(15), nullable=False)
-    seller_pan = Column(String(10), nullable=False)
+    seller_gstin = Column(String(50), nullable=False)
+    seller_pan = Column(String(50), nullable=False)
     seller_address = Column(Text, nullable=False)
     seller_state = Column(String(100), nullable=False)
-    seller_state_code = Column(String(2), nullable=False)
+    seller_state_code = Column(String(10), nullable=False)
 
     # Buyer / Customer Snapshot
     customer_name = Column(String(255), nullable=False)
-    customer_gstin = Column(String(15), nullable=True)
+    customer_gstin = Column(String(50), nullable=True)
     customer_billing_address = Column(Text, nullable=False)
     customer_shipping_address = Column(Text, nullable=False)
     customer_state = Column(String(100), nullable=False)
-    customer_state_code = Column(String(2), nullable=False)
+    customer_state_code = Column(String(10), nullable=False)
 
     # Tax regime flag
     is_inter_state = Column(Boolean, default=False, nullable=False)
     payment_terms = Column(String(100), default="Due on Receipt", nullable=False)
+
+    # Tax regime (GST = legacy Indian invoices; VAT = EU; SALES_TAX = US)
+    tax_type = Column(String(20), default="GST", nullable=False)
+    currency_code = Column(String(10), default="INR", nullable=False)
+    total_single_tax = Column(Numeric(14, 2), default=0.00, nullable=False)  # VAT / Sales Tax amount (0 for GST invoices)
 
     # Totals
     total_taxable_value = Column(Numeric(14, 2), default=0.00, nullable=False)
@@ -108,6 +113,11 @@ class Invoice(Base):
     # MinIO / Object Storage references
     pdf_storage_key = Column(String(500), nullable=True)
     pdf_url = Column(String(500), nullable=True)
+
+    # Payment tracking
+    paid_at = Column(DateTime, nullable=True)
+    payment_method = Column(String(50), nullable=True)
+    payment_reference = Column(String(100), nullable=True)
 
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
@@ -139,6 +149,8 @@ class InvoiceItem(Base):
     sgst_amount = Column(Numeric(12, 2), default=0.00, nullable=False)
     igst_rate = Column(Numeric(5, 2), default=0.00, nullable=False)
     igst_amount = Column(Numeric(12, 2), default=0.00, nullable=False)
+    single_tax_rate = Column(Numeric(5, 2), default=0.00, nullable=False)    # VAT / Sales Tax rate (0 for GST invoices)
+    single_tax_amount = Column(Numeric(12, 2), default=0.00, nullable=False)  # VAT / Sales Tax amount (0 for GST invoices)
     total = Column(Numeric(14, 2), nullable=False)
 
     invoice = relationship("Invoice", back_populates="items")

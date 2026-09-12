@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { IconChevronDown, IconCheck } from '../icons';
+import { useInventory } from '../../context/InventoryContext';
 
 interface StateOption {
   code: string;
@@ -7,7 +8,7 @@ interface StateOption {
   label: string;
 }
 
-const STATE_OPTIONS: StateOption[] = [
+const INDIA_STATE_OPTIONS: StateOption[] = [
   { code: '29', name: 'Karnataka', label: '29 - Karnataka (Intra-State CGST+SGST)' },
   { code: '33', name: 'Tamil Nadu', label: '33 - Tamil Nadu (Inter-State IGST)' },
   { code: '27', name: 'Maharashtra', label: '27 - Maharashtra (Inter-State IGST)' },
@@ -16,6 +17,27 @@ const STATE_OPTIONS: StateOption[] = [
   { code: '24', name: 'Gujarat', label: '24 - Gujarat (Inter-State IGST)' },
   { code: '32', name: 'Kerala', label: '32 - Kerala (Inter-State IGST)' },
   { code: '19', name: 'West Bengal', label: '19 - West Bengal (Inter-State IGST)' },
+];
+
+const US_STATE_OPTIONS: StateOption[] = [
+  { code: 'CA', name: 'California', label: 'CA - California (7.25% Sales Tax)' },
+  { code: 'DE', name: 'Delaware', label: 'DE - Delaware (0% - Tax-Exempt)' },
+  { code: 'NY', name: 'New York', label: 'NY - New York (4.0% Sales Tax)' },
+  { code: 'TX', name: 'Texas', label: 'TX - Texas (6.25% Sales Tax)' },
+  { code: 'FL', name: 'Florida', label: 'FL - Florida (6.0% Sales Tax)' },
+  { code: 'WA', name: 'Washington', label: 'WA - Washington (6.5% Sales Tax)' },
+  { code: 'IL', name: 'Illinois', label: 'IL - Illinois (6.25% Sales Tax)' },
+  { code: 'OR', name: 'Oregon', label: 'OR - Oregon (0% - Tax-Exempt)' },
+];
+
+const EU_REGION_OPTIONS: StateOption[] = [
+  { code: 'DE', name: 'Germany', label: 'DE - Germany (Domestic 19% VAT)' },
+  { code: 'FR', name: 'France', label: 'FR - France (Intra-EU Reverse Charge)' },
+  { code: 'NL', name: 'Netherlands', label: 'NL - Netherlands (Intra-EU Reverse Charge)' },
+  { code: 'IT', name: 'Italy', label: 'IT - Italy (Intra-EU Reverse Charge)' },
+  { code: 'ES', name: 'Spain', label: 'ES - Spain (Intra-EU Reverse Charge)' },
+  { code: 'AT', name: 'Austria', label: 'AT - Austria (Intra-EU Reverse Charge)' },
+  { code: 'EX', name: 'Export', label: 'EX - Non-EU Export (0% Zero-Rated)' },
 ];
 
 interface StateSelectDropdownProps {
@@ -29,10 +51,20 @@ export const StateSelectDropdown: React.FC<StateSelectDropdownProps> = ({
   onSelect,
   disabled = false,
 }) => {
+  const { taxConfig } = useInventory();
   const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
-  const selectedState = STATE_OPTIONS.find((s) => s.code === selectedCode) || STATE_OPTIONS[0];
+  const stateOptions =
+    taxConfig?.taxType === 'VAT'
+      ? EU_REGION_OPTIONS
+      : taxConfig?.taxType === 'SALES_TAX'
+      ? US_STATE_OPTIONS
+      : INDIA_STATE_OPTIONS;
+
+  const selectedState =
+    stateOptions.find((s) => s.code.toLowerCase() === selectedCode.toLowerCase() || s.name.toLowerCase() === selectedCode.toLowerCase()) ||
+    stateOptions[0];
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -86,9 +118,9 @@ export const StateSelectDropdown: React.FC<StateSelectDropdownProps> = ({
           className="absolute left-0 top-full mt-1 w-full min-w-[280px] sm:min-w-[320px] z-50 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-[#111622] shadow-2xl ring-1 ring-black/5 dark:ring-white/10 p-1.5 space-y-0.5 animate-in fade-in zoom-in-95 duration-150"
         >
           <div className="px-2.5 py-1 text-[10px] font-mono font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500 border-b border-slate-100 dark:border-slate-800 mb-1">
-            Place of Supply / GST State
+            Place of Supply / {taxConfig?.taxLabel || 'Tax'} Region
           </div>
-          {STATE_OPTIONS.map((st) => {
+          {stateOptions.map((st) => {
             const isSelected = st.code === selectedState.code;
             return (
               <button

@@ -133,16 +133,15 @@ export const ProductSearchDropdown: React.FC<ProductSearchDropdownProps> = ({
                   {selectedProduct.sku}
                 </span>
                 <span className="text-slate-400 dark:text-slate-600 text-[10px] shrink-0">•</span>
-                <span className="truncate font-medium text-slate-800 dark:text-slate-200 text-xs">
+                <span
+                  className="truncate font-medium text-slate-800 dark:text-slate-200 text-xs"
+                  title={selectedProduct.name}
+                >
                   {selectedProduct.name}
                 </span>
-                {isSelectedOutOfStock ? (
+                {isSelectedOutOfStock && (
                   <span className="shrink-0 font-bold text-[9px] uppercase tracking-wide text-rose-600 dark:text-rose-400 bg-rose-500/10 border border-rose-500/20 px-1.5 py-0.5 rounded">
                     0 in stock
-                  </span>
-                ) : (
-                  <span className="shrink-0 text-[10px] text-slate-400 dark:text-slate-500 font-mono">
-                    ({selectedProductStock} {selectedProduct.unitOfMeasure})
                   </span>
                 )}
               </>
@@ -174,7 +173,7 @@ export const ProductSearchDropdown: React.FC<ProductSearchDropdownProps> = ({
                 setSearchQuery('');
                 inputRef.current?.focus();
               }}
-              className="text-slate-400 hover:text-slate-200 text-xs p-0.5 shrink-0"
+              className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 text-xs p-0.5 shrink-0"
               title="Clear search"
             >
               ✕
@@ -245,10 +244,10 @@ export const ProductSearchDropdown: React.FC<ProductSearchDropdownProps> = ({
                           {p.name}
                         </span>
                       </div>
-                      <div className="flex items-center gap-2 mt-0.5 text-[10px] text-slate-400">
+                      <div className="flex items-center gap-2 mt-0.5 text-[10px] text-slate-500 dark:text-slate-400">
                         <span>{p.category}</span>
                         <span>•</span>
-                        <span className={isOut ? 'text-rose-500 font-semibold' : 'text-slate-400'}>
+                        <span className={isOut ? 'text-rose-500 font-semibold' : 'text-slate-500 dark:text-slate-400'}>
                           Stock: {locStock} {p.unitOfMeasure}
                         </span>
                         {p.reorderPoint > 0 && (

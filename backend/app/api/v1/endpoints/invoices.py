@@ -18,11 +18,13 @@ from app.models.order import SalesOrder, SalesOrderItem
 from app.models.user import User, UserRole
 from app.schemas.invoice import (
     InvoiceResponse,
+    InvoicePaymentRequest,
     TenantSettingsResponse,
     TenantSettingsUpdate,
 )
 from app.services.invoice_pdf_generator import InvoicePdfGenerator
 from app.services.storage import StorageService
+from app.services.tax_service import currency_symbol, get_org_tax_context
 
 router = APIRouter()
 
@@ -55,31 +57,79 @@ async def get_tenant_settings(
     """
     Fetch the legal invoicing profile and bank settings for the tenant.
     """
+    org_ctx = await get_org_tax_context(db, tenant_id)
+    country_code = org_ctx.get("country_code", "IN")
+    is_india = country_code == "IN"
+    tax_type = org_ctx.get("tax_type", "GST")
+    currency = org_ctx.get("currency_code", "INR")
+
     res = await db.execute(select(TenantSettings).where(TenantSettings.tenant_id == tenant_id))
     sett = res.scalar_one_or_none()
     if not sett:
-        # Create default tenant settings
-        sett = TenantSettings(
-            tenant_id=tenant_id,
-            legal_business_name="Invenza Enterprise Ltd",
-            gstin="29AABCI1234F1Z5",
-            pan="AABCI1234F",
-            registered_address="Outer Ring Road, Bengaluru, Karnataka 560103",
-            state="Karnataka",
-            state_code="29",
-            authorized_signatory_name="Vijay B",
-            bank_name="HDFC Bank",
-            bank_account_number="50200012345678",
-            bank_ifsc_code="HDFC0001234",
-            bank_branch="Koramangala 5th Block, Bengaluru",
-            account_holder_name="Invenza Enterprise Ltd",
-            invoice_prefix="INV",
-            auto_email_invoice=False,
-        )
+        # Create default tenant settings per org context
+        if is_india:
+            sett = TenantSettings(
+                tenant_id=tenant_id,
+                legal_business_name=org_ctx.get("company_name") or "Invenza Enterprise Ltd",
+                gstin="29AABCI1234F1Z5",
+                pan="AABCI1234F",
+                registered_address="Outer Ring Road, Bengaluru, Karnataka 560103",
+                state="Karnataka",
+                state_code="29",
+                authorized_signatory_name="Vijay B",
+                bank_name="HDFC Bank",
+                bank_account_number="50200012345678",
+                bank_ifsc_code="HDFC0001234",
+                bank_branch="Koramangala 5th Block, Bengaluru",
+                account_holder_name="Invenza Enterprise Ltd",
+                invoice_prefix="INV",
+                auto_email_invoice=False,
+            )
+        else:
+            sett = TenantSettings(
+                tenant_id=tenant_id,
+                legal_business_name=org_ctx.get("company_name") or "Enterprise Ltd",
+                gstin="",
+                pan="",
+                registered_address=org_ctx.get("country_name", "Corporate Office"),
+                state=org_ctx.get("state") or org_ctx.get("country_name", ""),
+                state_code=org_ctx.get("state_code") or country_code,
+                authorized_signatory_name="Authorized Signatory",
+                bank_name="",
+                bank_account_number="",
+                bank_ifsc_code="",
+                bank_branch="",
+                account_holder_name=org_ctx.get("company_name") or "Enterprise Ltd",
+                invoice_prefix="INV",
+                auto_email_invoice=False,
+            )
         db.add(sett)
         await db.commit()
         await db.refresh(sett)
-    return sett
+    else:
+        # Auto-heal legacy dummy seed if present on non-Indian org
+        needs_commit = False
+        if not is_india and sett.pan == "AABCI1234F":
+            sett.pan = ""
+            needs_commit = True
+        if not is_india and sett.state_code == "29":
+            sett.state_code = org_ctx.get("state_code") or country_code
+            sett.state = org_ctx.get("state") or org_ctx.get("country_name", "")
+            needs_commit = True
+        if needs_commit:
+            await db.commit()
+            await db.refresh(sett)
+
+    resp = TenantSettingsResponse.model_validate(sett)
+    resp.tax_type = tax_type
+    resp.country_code = country_code
+    resp.currency_code = currency
+    resp.tax_id = sett.gstin
+    resp.vat_id = sett.gstin
+    resp.tax_reg_number = sett.gstin
+    resp.national_tax_id = sett.pan
+    resp.bank_routing_code = sett.bank_ifsc_code
+    return resp
 
 @router.put("/settings/company", response_model=TenantSettingsResponse)
 async def update_tenant_settings(
@@ -88,8 +138,9 @@ async def update_tenant_settings(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Update tenant's legal invoicing profile, GSTIN, and bank remittance details.
+    Update tenant's legal invoicing profile, GSTIN/VAT/Tax ID, and bank remittance details.
     """
+    org_ctx = await get_org_tax_context(db, tenant_id)
     res = await db.execute(select(TenantSettings).where(TenantSettings.tenant_id == tenant_id))
     sett = res.scalar_one_or_none()
     if not sett:
@@ -97,14 +148,25 @@ async def update_tenant_settings(
         db.add(sett)
 
     update_data = payload.dict(exclude_unset=True)
+    virtual_fields = {"tax_id", "vat_id", "tax_reg_number", "national_tax_id", "bank_routing_code", "ein", "steuernummer"}
     for k, v in update_data.items():
-        if v is not None:
+        if k not in virtual_fields and v is not None:
             setattr(sett, k, v)
 
     sett.updated_at = datetime.utcnow()
     await db.commit()
     await db.refresh(sett)
-    return sett
+
+    resp = TenantSettingsResponse.model_validate(sett)
+    resp.tax_type = org_ctx.get("tax_type", "GST")
+    resp.country_code = org_ctx.get("country_code", "IN")
+    resp.currency_code = org_ctx.get("currency_code", "INR")
+    resp.tax_id = sett.gstin
+    resp.vat_id = sett.gstin
+    resp.tax_reg_number = sett.gstin
+    resp.national_tax_id = sett.pan
+    resp.bank_routing_code = sett.bank_ifsc_code
+    return resp
 
 @router.post("/settings/upload-logo")
 async def upload_company_logo(
@@ -267,6 +329,10 @@ async def download_invoice_pdf(
             "customer_state": inv.customer_state,
             "customer_state_code": inv.customer_state_code,
             "is_inter_state": inv.is_inter_state,
+            "tax_type": inv.tax_type or "GST",
+            "currency_code": inv.currency_code or "INR",
+            "currency_symbol": currency_symbol(inv.currency_code),
+            "total_single_tax": float(inv.total_single_tax),
             "payment_terms": inv.payment_terms,
             "total_taxable_value": float(inv.total_taxable_value),
             "total_cgst": float(inv.total_cgst),
@@ -276,10 +342,10 @@ async def download_invoice_pdf(
             "grand_total": float(inv.grand_total),
             "grand_total_words": inv.grand_total_words,
             "so_number": so_number,
-            "bank_name": sett.bank_name if sett else "HDFC Bank",
-            "bank_account_number": sett.bank_account_number if sett else "50200012345678",
-            "bank_ifsc_code": sett.bank_ifsc_code if sett else "HDFC0001234",
-            "bank_branch": sett.bank_branch if sett else "Koramangala 5th Block, Bengaluru",
+            "bank_name": sett.bank_name if sett and sett.bank_name else ("HDFC Bank" if inv.tax_type == "GST" else ""),
+            "bank_account_number": sett.bank_account_number if sett and sett.bank_account_number else ("50200012345678" if inv.tax_type == "GST" else ""),
+            "bank_ifsc_code": sett.bank_ifsc_code if sett and sett.bank_ifsc_code else ("HDFC0001234" if inv.tax_type == "GST" else ""),
+            "bank_branch": sett.bank_branch if sett and sett.bank_branch else ("Koramangala 5th Block, Bengaluru" if inv.tax_type == "GST" else ""),
             "account_holder_name": sett.account_holder_name if sett else inv.seller_legal_name,
             "authorized_signatory_name": sett.authorized_signatory_name if sett else "Authorized Signatory",
             "items": [
@@ -347,3 +413,38 @@ async def void_invoice(
     await db.commit()
     await db.refresh(inv)
     return inv
+
+@router.post("/{invoice_id}/pay", response_model=InvoiceResponse)
+async def mark_invoice_paid(
+    invoice_id: UUID,
+    payload: Optional[InvoicePaymentRequest] = None,
+    tenant_id: UUID = Depends(get_current_tenant_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Mark an issued invoice as Paid once customer payment is recorded/confirmed.
+    Voided invoices cannot be marked as paid.
+    """
+    res = await db.execute(
+        select(Invoice)
+        .options(selectinload(Invoice.items))
+        .where(and_(Invoice.id == invoice_id, Invoice.tenant_id == tenant_id))
+    )
+    inv = res.scalar_one_or_none()
+    if not inv:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+
+    if inv.status == InvoiceStatus.VOID:
+        raise HTTPException(status_code=400, detail="Cannot record payment on a voided invoice")
+
+    inv.status = InvoiceStatus.PAID
+    inv.paid_at = (payload.paid_at if payload and payload.paid_at else None) or datetime.utcnow()
+    inv.payment_method = (payload.payment_method if payload and payload.payment_method else None) or "Bank Transfer"
+    if payload and payload.payment_reference:
+        inv.payment_reference = payload.payment_reference
+    inv.updated_at = datetime.utcnow()
+
+    await db.commit()
+    await db.refresh(inv)
+    return inv
+

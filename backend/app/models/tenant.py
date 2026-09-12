@@ -16,7 +16,8 @@ class Tenant(Base):
     location = Column(String(255), nullable=True, default="Headquarters")
     state = Column(String(100), nullable=True)
     pincode = Column(String(10), nullable=True)
-    currency_code = Column(String(10), default="INR", nullable=False)
+    country_code = Column(String(2), default="IN", nullable=False)  # locked after provisioning
+    currency_code = Column(String(10), default="INR", nullable=False)  # derived from country_code, locked after provisioning
     tier = Column(String(100), default="Growth Suite", nullable=False)
     tags = Column(JSONB, default=list, nullable=False)
     enabled_modules = Column(JSONB, default=list, nullable=False)

@@ -308,6 +308,14 @@ export const IconDollarSign: React.FC<IconProps> = ({ className = 'h-4 w-4', ...
   </svg>
 );
 
+export const IconEuro: React.FC<IconProps> = ({ className = 'h-4 w-4', ...props }) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className={className} {...props}>
+    <path d="M4 10h12" />
+    <path d="M4 14h9" />
+    <path d="M19 6a7.7 7.7 0 0 0-5.2-2A7.9 7.9 0 0 0 6 12a7.9 7.9 0 0 0 7.8 8 7.7 7.7 0 0 0 5.2-2" />
+  </svg>
+);
+
 export const IconIndianRupee: React.FC<IconProps> = ({ className = 'h-4 w-4', ...props }) => (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className={className} {...props}>
     <path d="M6 3h12" />

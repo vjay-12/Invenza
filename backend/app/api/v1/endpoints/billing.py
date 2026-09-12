@@ -24,6 +24,15 @@ from app.models.invoice import TenantSettings, TenantInvoiceSequence, Invoice, I
 from app.services.gst_service import GSTService, amount_to_indian_words
 from app.services.invoice_pdf_generator import InvoicePdfGenerator
 from app.services.email_service import EmailService
+from app.services.tax_service import (
+    TaxService,
+    TAX_LABELS,
+    get_org_tax_context,
+    currency_symbol,
+    amount_to_words,
+    resolve_org_state,
+    region_display,
+)
 from app.schemas.billing import (
     BillingOverviewResponse,
     BillingOrgSummary,
@@ -82,9 +91,20 @@ async def compute_tenant_billing_tax(
     is_waived: bool = False,
 ) -> dict:
     """
-    Computes GST tax breakdown (Intra-state CGST 9% + SGST 9% vs Inter-state IGST 18%)
-    based on Invenza's registered Karnataka state (29) vs tenant org's registered state.
+    Computes the tax breakdown for platform billing (setup fee / monthly maintenance)
+    via the centralized TaxService. India keeps CGST+SGST vs IGST; EU orgs get a
+    single VAT line; US orgs get a single Sales Tax line (0% states render 0%).
+    Currency/symbol always come from the org's locked country configuration.
     """
+    # 0. Org tax identity (country, resolved state, derived currency, TaxReference row)
+    context = await get_org_tax_context(db, tenant_id)
+    country = context["country_code"]
+    currency = context["currency"]
+    sym = currency_symbol(currency)
+    tax_type = context["tax_ref"].tax_type if context["tax_ref"] else "GST"
+    tax_label = {"GST": "GST", "VAT": "VAT", "SALES_TAX": "Sales Tax"}.get(tax_type, tax_type)
+    region = region_display(context)
+
     # 1. Fetch Invenza seller profile (Karnataka - 29)
     invenza_sett_res = await db.execute(select(TenantSettings).where(TenantSettings.tenant_id == MASTER_TENANT_ID))
     invenza_sett = invenza_sett_res.scalar_one_or_none()
@@ -109,71 +129,37 @@ async def compute_tenant_billing_tax(
     tenant_sett = tenant_sett_res.scalar_one_or_none()
 
     buyer_name = (tenant_sett.legal_business_name if tenant_sett and tenant_sett.legal_business_name else tenant_name)
-    raw_gstin = tenant_sett.gstin if tenant_sett and tenant_sett.gstin else "URP"
-    buyer_gstin = raw_gstin.strip()[:15]
-    buyer_raw_state = (
-        (tenant_sett.state if tenant_sett and tenant_sett.state else None)
-        or (tenant.state if tenant and tenant.state else None)
-        or (tenant.location if tenant else "Karnataka")
-    )
-    buyer_code, buyer_state = GSTService.normalize_state_code(buyer_raw_state)
-    if not buyer_code:
-        buyer_code, buyer_state = "29", "Karnataka"
+    raw_gstin = (tenant_sett.gstin if tenant_sett and tenant_sett.gstin else ("URP" if country == "IN" else ""))
+    buyer_gstin = raw_gstin.strip()[:15] if raw_gstin else ""
+
+    if country == "IN":
+        buyer_raw_state = (
+            (tenant_sett.state if tenant_sett and tenant_sett.state else None)
+            or (tenant.state if tenant and tenant.state else None)
+            or (tenant.location if tenant else "Karnataka")
+        )
+        buyer_code, buyer_state = GSTService.normalize_state_code(buyer_raw_state)
+        if not buyer_code:
+            buyer_code, buyer_state = "29", "Karnataka"
+    else:
+        buyer_code = context.get("state_code") or country
+        buyer_state = context.get("state_name") or region
+
     buyer_address = (
         tenant_sett.registered_address
         if tenant_sett and tenant_sett.registered_address
         else (
             f"{tenant.location}, {buyer_state} - {tenant.pincode}"
             if tenant and tenant.pincode and tenant.location
-            else (tenant.location if tenant else "Registered Business Address")
+            else (f"{tenant.location}, {buyer_state}" if tenant else "Registered Business Address")
         )
     )
 
-    # 3. Calculate GST (SAC 998313 for IT Software & SaaS Services)
-    sac_code = "998313"
+    # 3. Line items (SAC 998313 is India-specific; EU/US invoices carry no SAC/HSN)
+    sac_code = "998313" if country == "IN" else ""
     amt_val = float(amount or 0.0)
 
-    if is_waived or amt_val == 0.0:
-        return {
-            "seller_name": seller_name,
-            "seller_gstin": seller_gstin,
-            "seller_pan": seller_pan,
-            "seller_state": seller_state,
-            "seller_state_code": seller_state_code,
-            "seller_address": seller_address,
-            "buyer_name": buyer_name,
-            "buyer_gstin": buyer_gstin,
-            "buyer_state": buyer_state,
-            "buyer_state_code": buyer_code,
-            "buyer_address": buyer_address,
-            "sac_code": sac_code,
-            "gst_rate": 0.0,
-            "taxable_amount": 0.0,
-            "cgst_amount": 0.0,
-            "sgst_amount": 0.0,
-            "igst_amount": 0.0,
-            "total_amount": 0.0,
-            "is_inter_state": (seller_state_code != buyer_code),
-            "place_of_supply": f"{buyer_code} - {buyer_state}",
-            "item_description": f"{cycle_or_desc} (Waived - ₹0 Promotional)",
-        }
-
-    line_items = [{
-        "item_description": f"{cycle_or_desc} (SAC: {sac_code})",
-        "hsn_code": sac_code,
-        "quantity": 1,
-        "unit_price": amt_val,
-        "discount": 0.0,
-        "gst_rate": 18.0,
-    }]
-
-    calc = GSTService.calculate_invoice_taxes(
-        seller_state_code=seller_state_code,
-        place_of_supply_state_code=buyer_code,
-        line_items=line_items,
-    )
-
-    return {
+    base_info = {
         "seller_name": seller_name,
         "seller_gstin": seller_gstin,
         "seller_pan": seller_pan,
@@ -186,15 +172,60 @@ async def compute_tenant_billing_tax(
         "buyer_state_code": buyer_code,
         "buyer_address": buyer_address,
         "sac_code": sac_code,
-        "gst_rate": 18.0,
+        "tax_type": tax_type,
+        "tax_label": tax_label,
+        "currency_code": currency,
+        "currency_symbol": sym,
+        "region_display": region,
+        "sourcing_rule": context["tax_ref"].sourcing_rule if context["tax_ref"] else None,
+        "is_inter_state": (seller_state_code != buyer_code) if country == "IN" else False,
+        "place_of_supply": f"{buyer_code} - {buyer_state}" if country == "IN" else region,
+    }
+
+    if is_waived or amt_val == 0.0:
+        return {
+            **base_info,
+            "gst_rate": 0.0,
+            "tax_rate": 0.0,
+            "taxable_amount": 0.0,
+            "cgst_amount": 0.0,
+            "sgst_amount": 0.0,
+            "igst_amount": 0.0,
+            "single_tax_amount": 0.0,
+            "total_amount": 0.0,
+            "item_description": f"{cycle_or_desc} (Waived - {sym}0 Promotional)",
+            "calc": None,
+        }
+
+    line_items = [{
+        "item_description": f"{cycle_or_desc} (SAC: {sac_code})" if sac_code else cycle_or_desc,
+        "hsn_code": sac_code,
+        "quantity": 1,
+        "unit_price": amt_val,
+        "discount": 0.0,
+        "gst_rate": 18.0 if country == "IN" else 0.0,  # EU/US rate comes from TaxReference
+    }]
+
+    calc = await TaxService.calculate(
+        db,
+        tenant_id=tenant_id,
+        line_items=line_items,
+        seller_state_code=seller_state_code,
+        place_of_supply_state_code=buyer_code,
+        is_waived=False,
+    )
+
+    return {
+        **base_info,
+        "gst_rate": 18.0 if country == "IN" else calc["tax_rate"],
+        "tax_rate": calc["tax_rate"],
         "taxable_amount": calc["total_taxable_value"],
         "cgst_amount": calc["total_cgst"],
         "sgst_amount": calc["total_sgst"],
         "igst_amount": calc["total_igst"],
+        "single_tax_amount": calc["total_single_tax"],
         "total_amount": calc["grand_total"],
-        "is_inter_state": calc["is_inter_state"],
-        "place_of_supply": calc["place_of_supply"],
-        "item_description": f"{cycle_or_desc} (SAC: {sac_code})",
+        "item_description": line_items[0]["item_description"],
         "calc": calc,
     }
 
@@ -241,18 +272,24 @@ async def create_gst_invoice_for_billing(
         customer_state=tax_info["buyer_state"],
         customer_state_code=tax_info["buyer_state_code"],
         is_inter_state=tax_info["is_inter_state"],
+        tax_type=tax_info["tax_type"],
+        currency_code=tax_info["currency_code"],
         payment_terms="Advance SaaS Service Agreement",
         total_taxable_value=tax_info["taxable_amount"],
         total_cgst=tax_info["cgst_amount"],
         total_sgst=tax_info["sgst_amount"],
         total_igst=tax_info["igst_amount"],
+        total_single_tax=tax_info["single_tax_amount"],
         round_off=0.00,
         grand_total=tax_info["total_amount"],
-        grand_total_words=amount_to_indian_words(tax_info["total_amount"]),
+        grand_total_words=amount_to_words(tax_info["total_amount"], tax_info["currency_code"]),
     )
     db.add(inv)
     await db.flush()
 
+    # Rate labels come from the computed line (never hardcoded 9/9/18 literals):
+    # GST intra -> cgst=sgst=rate/2, inter -> igst=rate; EU/US -> single_tax only.
+    calc_item = (tax_info.get("calc") or {}).get("items", [{}])[0]
     item = InvoiceItem(
         invoice_id=inv.id,
         item_description=tax_info["item_description"],
@@ -263,12 +300,14 @@ async def create_gst_invoice_for_billing(
         discount=0.0,
         taxable_value=tax_info["taxable_amount"],
         gst_rate=tax_info["gst_rate"],
-        cgst_rate=9.0 if (not tax_info["is_inter_state"]) else 0.0,
+        cgst_rate=calc_item.get("cgst_rate", 0.0),
         cgst_amount=tax_info["cgst_amount"],
-        sgst_rate=9.0 if (not tax_info["is_inter_state"]) else 0.0,
+        sgst_rate=calc_item.get("sgst_rate", 0.0),
         sgst_amount=tax_info["sgst_amount"],
-        igst_rate=18.0 if tax_info["is_inter_state"] else 0.0,
+        igst_rate=calc_item.get("igst_rate", 0.0),
         igst_amount=tax_info["igst_amount"],
+        single_tax_rate=calc_item.get("single_tax_rate", 0.0),
+        single_tax_amount=tax_info["single_tax_amount"],
         total=tax_info["total_amount"],
     )
     db.add(item)
@@ -305,6 +344,7 @@ async def build_pdf_invoice_dict_from_tax(
     invenza_sett_res = await db.execute(select(TenantSettings).where(TenantSettings.tenant_id == MASTER_TENANT_ID))
     invenza_sett = invenza_sett_res.scalar_one_or_none()
 
+    calc_item = (tax_info.get("calc") or {}).get("items", [{}])[0]
     item_row = {
         "item_description": tax_info["item_description"],
         "hsn_code": tax_info["sac_code"],
@@ -312,25 +352,34 @@ async def build_pdf_invoice_dict_from_tax(
         "unit_price": tax_info["taxable_amount"],
         "taxable_value": tax_info["taxable_amount"],
         "gst_rate": tax_info["gst_rate"],
-        "cgst_rate": 9.0 if (not is_inter and not is_waived) else 0.0,
+        "cgst_rate": calc_item.get("cgst_rate", 0.0),
         "cgst_amount": tax_info["cgst_amount"],
-        "sgst_rate": 9.0 if (not is_inter and not is_waived) else 0.0,
+        "sgst_rate": calc_item.get("sgst_rate", 0.0),
         "sgst_amount": tax_info["sgst_amount"],
-        "igst_rate": 18.0 if (is_inter and not is_waived) else 0.0,
+        "igst_rate": calc_item.get("igst_rate", 0.0),
         "igst_amount": tax_info["igst_amount"],
+        "single_tax_rate": calc_item.get("single_tax_rate", 0.0),
+        "single_tax_amount": tax_info["single_tax_amount"],
         "total": tax_info["total_amount"],
     }
 
-    words = amount_to_indian_words(tax_info["total_amount"])
+    words = amount_to_words(tax_info["total_amount"], tax_info["currency_code"])
     inv_date_str = (payment_date or datetime.utcnow()).strftime("%Y-%m-%d")
 
     return {
         "seller_legal_name": tax_info["seller_name"],
-        "seller_registered_address": tax_info["seller_address"],
+        "seller_address": tax_info["seller_address"],
         "seller_gstin": tax_info["seller_gstin"],
         "seller_pan": tax_info["seller_pan"],
         "seller_state": tax_info["seller_state"],
         "seller_state_code": tax_info["seller_state_code"],
+        "tax_type": tax_info["tax_type"],
+        "tax_label": tax_info["tax_label"],
+        "tax_rate": tax_info.get("tax_rate"),
+        "currency_code": tax_info["currency_code"],
+        "currency_symbol": tax_info["currency_symbol"],
+        "region_display": tax_info["region_display"],
+        "sourcing_rule": tax_info.get("sourcing_rule"),
         "document_title": "TAX INVOICE" if not is_waived else "BILL OF SUPPLY / WAIVED RECORD",
         "invoice_number": invoice_number,
         "invoice_date": inv_date_str,
@@ -348,6 +397,7 @@ async def build_pdf_invoice_dict_from_tax(
         "total_cgst": tax_info["cgst_amount"],
         "total_sgst": tax_info["sgst_amount"],
         "total_igst": tax_info["igst_amount"],
+        "total_single_tax": tax_info["single_tax_amount"],
         "round_off": 0.0,
         "grand_total": tax_info["total_amount"],
         "grand_total_words": words,
@@ -493,6 +543,9 @@ async def get_billing_overview(
     pending_setup_count = 0
     pending_setup_sum = 0.0
     overdue_count = 0
+    # Per-currency subtotals — amounts across currencies must never be summed together
+    revenue_by_currency: Dict[str, float] = {}
+    mrr_by_currency: Dict[str, float] = {}
 
     for t in all_tenants:
         # Fetch or initialize OrgSetupFee
@@ -606,6 +659,20 @@ async def get_billing_overview(
             elif flt == "waived" and (this_month_st != "Waived" and current_rate > 0):
                 continue
 
+        # Per-currency aggregates (append-only; totals across currencies are never mixed)
+        org_currency = (t.currency_code or "INR").upper()
+        mrr_by_currency[org_currency] = round(mrr_by_currency.get(org_currency, 0.0) + current_rate, 2)
+        if sf.status == "Paid":
+            revenue_by_currency[org_currency] = round(revenue_by_currency.get(org_currency, 0.0) + setup_fee_amt, 2)
+        paid_cyc_res = await db.execute(
+            select(func.coalesce(func.sum(OrgMaintenanceCycle.amount), 0.0)).where(
+                and_(OrgMaintenanceCycle.org_id == t.id, OrgMaintenanceCycle.status == "Paid")
+            )
+        )
+        paid_cyc_amt = float(paid_cyc_res.scalar_one() or 0.0)
+        if paid_cyc_amt:
+            revenue_by_currency[org_currency] = round(revenue_by_currency.get(org_currency, 0.0) + paid_cyc_amt, 2)
+
         org_summaries.append(
             BillingOrgSummary(
                 id=t.id,
@@ -614,6 +681,8 @@ async def get_billing_overview(
                 company_code=t.company_code or t.unique_code,
                 industry=t.industry or "General Merchandise",
                 tier=getattr(t, "tier", "Growth Suite") or "Growth Suite",
+                country_code=(t.country_code or "IN").upper(),
+                currency_code=(t.currency_code or "INR").upper(),
                 setup_fee_amount=setup_fee_amt,
                 setup_fee_status=sf.status,
                 setup_fee=setup_fee_amt,
@@ -650,6 +719,8 @@ async def get_billing_overview(
         zero_maintenance_orgs_count=zero_maintenance_count,
         zero_maintenance_orgs=zero_maintenance_count,
         overdue_count=overdue_count,
+        revenue_by_currency=revenue_by_currency,
+        mrr_by_currency=mrr_by_currency,
         organizations=org_summaries,
         tenants=org_summaries,
     )
@@ -796,6 +867,8 @@ async def get_tenant_billing_detail(
         "industry": tenant.industry or "General Merchandise",
         "location": tenant.location or "Headquarters",
         "tier": getattr(tenant, "tier", "Growth Suite") or "Growth Suite",
+        "country_code": (tenant.country_code or "IN").upper(),
+        "currency_code": (tenant.currency_code or "INR").upper(),
         "is_active": tenant.is_active,
         "is_archived": getattr(tenant, "is_archived", False),
         "status": "Active" if (tenant.is_active and not getattr(tenant, "is_archived", False)) else "Deactivated",
@@ -812,7 +885,7 @@ async def get_tenant_billing_detail(
         "setup_fee_payment_mode": sf.payment_mode or "manual",
         "setup_fee_recorded_by": sf.recorded_by,
         "monthly_maintenance_fee": float(current_plan.current_rate),
-        "maintenance_currency": "INR",
+        "maintenance_currency": (tenant.currency_code or "INR").upper(),
         "billing_cycle_day": 1,
         "created_at": sf.created_at,
         "updated_at": sf.updated_at,
@@ -821,6 +894,8 @@ async def get_tenant_billing_detail(
     return {
         # Backward compatibility properties
         **profile_dict,
+        "country_code": (tenant.country_code or "IN").upper(),
+        "currency_code": (tenant.currency_code or "INR").upper(),
         "profile": profile_dict,
         "fee_history": rate_history,
         "payments": transactions,
@@ -930,7 +1005,7 @@ async def mark_setup_fee_paid(
         action_type="setup_fee_marked_paid",
         target_type="billing",
         target_id=str(setup_fee.id),
-        description=f"Marked setup fee as Paid (₹{amount_to_pay:,.2f}) via {req.payment_mode} for {tenant_name} (Invoice: {inv_num})",
+        description=f"Marked setup fee as Paid ({currency_symbol((tenant.currency_code or 'INR') if tenant else 'INR')}{amount_to_pay:,.2f}) via {req.payment_mode} for {tenant_name} (Invoice: {inv_num})",
         before_values=before_vals,
         after_values=after_vals,
     ))
@@ -957,6 +1032,11 @@ async def mark_setup_fee_paid(
             cgst=float(inv.total_cgst or 0.0),
             sgst=float(inv.total_sgst or 0.0),
             igst=float(inv.total_igst or 0.0),
+            single_tax=float(inv.total_single_tax or 0.0),
+            tax_type=inv.tax_type or "GST",
+            tax_label=TAX_LABELS.get(inv.tax_type or "GST", "GST"),
+            currency_code=inv.currency_code or "INR",
+            currency_symbol=currency_symbol(inv.currency_code),
             grand_total=float(inv.grand_total or 0.0),
             place_of_supply=inv.place_of_supply or "India",
             invoice_id=str(setup_fee.id),
@@ -1066,7 +1146,7 @@ async def mark_cycle_paid(
         action_type="cycle_marked_paid",
         target_type="billing",
         target_id=str(cycle.id),
-        description=f"Marked cycle {cycle.cycle_month} as Paid (₹{amount_to_pay:,.2f}) via {req.payment_mode} for {tenant_name} (Invoice: {inv_num})",
+        description=f"Marked cycle {cycle.cycle_month} as Paid ({currency_symbol((tenant.currency_code or 'INR') if tenant else 'INR')}{amount_to_pay:,.2f}) via {req.payment_mode} for {tenant_name} (Invoice: {inv_num})",
         before_values=before_vals,
         after_values=after_vals,
     ))
@@ -1093,6 +1173,11 @@ async def mark_cycle_paid(
             cgst=float(inv.total_cgst or 0.0),
             sgst=float(inv.total_sgst or 0.0),
             igst=float(inv.total_igst or 0.0),
+            single_tax=float(inv.total_single_tax or 0.0),
+            tax_type=inv.tax_type or "GST",
+            tax_label=TAX_LABELS.get(inv.tax_type or "GST", "GST"),
+            currency_code=inv.currency_code or "INR",
+            currency_symbol=currency_symbol(inv.currency_code),
             grand_total=float(inv.grand_total or 0.0),
             place_of_supply=inv.place_of_supply or "India",
             invoice_id=str(cycle.id),
@@ -1239,6 +1324,7 @@ async def update_tenant_maintenance_rate(
         prof.monthly_maintenance_fee = req.new_rate
 
     # Record to AuditLog
+    rate_sym = currency_symbol(tenant.currency_code or "INR")
     db.add(AuditLog(
         actor_id=admin.id,
         actor_name=admin.full_name or "Super Admin",
@@ -1248,7 +1334,7 @@ async def update_tenant_maintenance_rate(
         action_type="maintenance_rate_changed",
         target_type="billing",
         target_id=str(tenant_id),
-        description=f"Adjusted agreed maintenance rate from ₹{prev_rate:,.2f} to ₹{req.new_rate:,.2f} for {tenant.name} (Effective: {effective_dt.strftime('%Y-%m-%d')})",
+        description=f"Adjusted agreed maintenance rate from {rate_sym}{prev_rate:,.2f} to {rate_sym}{req.new_rate:,.2f} for {tenant.name} (Effective: {effective_dt.strftime('%Y-%m-%d')})",
         before_values={"current_rate": prev_rate},
         after_values={
             "current_rate": req.new_rate,
@@ -1261,7 +1347,7 @@ async def update_tenant_maintenance_rate(
     await db.refresh(new_plan)
     return {
         "success": True,
-        "message": f"Maintenance plan updated to ₹{req.new_rate:,.2f} / month.",
+        "message": f"Maintenance plan updated to {rate_sym}{req.new_rate:,.2f} / month.",
         "plan": new_plan,
     }
 

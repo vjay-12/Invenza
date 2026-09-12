@@ -28,7 +28,7 @@ import {
 import { api } from '../services/api';
 import { PageMeta } from '../components/common/PageMeta';
 import { SimpleSelectDropdown, DropdownOption } from '../components/common/SimpleSelectDropdown';
-import { INDUSTRIES_LIST, AVAILABLE_MODULES, INDIAN_STATES_LIST } from '../data/platformConstants';
+import { INDUSTRIES_LIST, AVAILABLE_MODULES, INDIAN_STATES_LIST, SUPPORTED_COUNTRIES, US_STATES_LIST, COUNTRY_CURRENCY_MAP, CURRENCY_SYMBOLS, currencySymbolFor } from '../data/platformConstants';
 
 const LEAD_STATUS_CONFIG: Record<string, { label: string; color: string; dot: string }> = {
   new: {
@@ -125,9 +125,9 @@ export const LeadsManagement: React.FC<LeadsManagementProps> = ({ onNavigate }) 
   const [provCompanyCode, setProvCompanyCode] = useState('');
   const [provIndustry, setProvIndustry] = useState(INDUSTRIES_LIST[0]);
   const [provLocation, setProvLocation] = useState('');
+  const [provCountry, setProvCountry] = useState('IN');
   const [provState, setProvState] = useState('');
   const [provPincode, setProvPincode] = useState('');
-  const [provCurrency, setProvCurrency] = useState('INR');
   const [provTier, setProvTier] = useState('Growth Suite');
   const [provQuotedSetupFee, setProvQuotedSetupFee] = useState('0');
   const [provAdminName, setProvAdminName] = useState('');
@@ -231,9 +231,9 @@ export const LeadsManagement: React.FC<LeadsManagementProps> = ({ onNavigate }) 
     setProvCompanyCode(cleanCode || 'COMP');
     setProvIndustry(INDUSTRIES_LIST.includes(lead.industry) ? lead.industry : INDUSTRIES_LIST[0]);
     setProvLocation(lead.location || 'Headquarters');
+    setProvCountry(SUPPORTED_COUNTRIES.some((c) => c.code === lead.country_code) ? lead.country_code : 'IN');
     setProvState(lead.state || '');
     setProvPincode(lead.pincode || '');
-    setProvCurrency('INR');
     setProvTier(lead.tier_estimate || 'Growth Suite');
     setProvQuotedSetupFee(String(lead.quoted_amount || 0));
     setProvAdminName(lead.contact_name || '');
@@ -255,6 +255,10 @@ export const LeadsManagement: React.FC<LeadsManagementProps> = ({ onNavigate }) 
       showToast('Please provide all mandatory fields.', 'error');
       return;
     }
+    if (provCountry === 'US' && !provState.trim()) {
+      showToast('Please select a US state before provisioning.', 'error');
+      return;
+    }
     setIsSubmittingProvision(true);
     try {
       const res = await api.provisionCompany({
@@ -263,9 +267,9 @@ export const LeadsManagement: React.FC<LeadsManagementProps> = ({ onNavigate }) 
         unique_code: provCompanyCode.trim().toUpperCase() || undefined,
         industry: provIndustry,
         location: provLocation.trim() || 'Headquarters',
-        state: provState.trim() || undefined,
+        state: provShowState && provState.trim() ? provState.trim() : undefined,
         pincode: provPincode.trim() || undefined,
-        currency_code: provCurrency,
+        country_code: provCountry,
         tier: provTier,
         tags: [provTier],
         lead_id: convertingLead?.id,
@@ -332,6 +336,17 @@ export const LeadsManagement: React.FC<LeadsManagementProps> = ({ onNavigate }) 
     { value: 'rejected_lost', label: `Lost / Declined (${lostCount})` },
   ];
 
+  const handleProvCountryChange = (code: string) => {
+    setProvCountry(code);
+    setProvState('');
+  };
+
+  const provCountryName = SUPPORTED_COUNTRIES.find((c) => c.code === provCountry)?.name || provCountry;
+  const provDerivedCurrency = COUNTRY_CURRENCY_MAP[provCountry] || 'INR';
+  const provCurrencySymbol = CURRENCY_SYMBOLS[provDerivedCurrency] || '₹';
+  const provStateList = provCountry === 'US' ? US_STATES_LIST : INDIAN_STATES_LIST;
+  const provShowState = provCountry === 'IN' || provCountry === 'US';
+
   return (
     <div className="space-y-4 animate-in fade-in duration-200 pb-6">
       <PageMeta
@@ -345,8 +360,8 @@ export const LeadsManagement: React.FC<LeadsManagementProps> = ({ onNavigate }) 
         <div
           className={`fixed top-5 right-5 z-50 px-4 py-3 rounded-xl shadow-2xl flex items-center gap-3 border text-sm font-semibold animate-in slide-in-from-top duration-200 ${
             toastMessage.type === 'success'
-              ? 'bg-emerald-950/90 border-emerald-500/40 text-emerald-300 backdrop-blur-xl'
-              : 'bg-rose-950/90 border-rose-500/40 text-rose-300 backdrop-blur-xl'
+              ? 'bg-emerald-50 border-emerald-300 text-emerald-700 dark:bg-emerald-950/90 dark:border-emerald-500/40 dark:text-emerald-300 backdrop-blur-xl'
+              : 'bg-rose-50 border-rose-300 text-rose-700 dark:bg-rose-950/90 dark:border-rose-500/40 dark:text-rose-300 backdrop-blur-xl'
           }`}
         >
           {toastMessage.type === 'success' ? (
@@ -757,7 +772,7 @@ export const LeadsManagement: React.FC<LeadsManagementProps> = ({ onNavigate }) 
                   </p>
                 </div>
                 <span className="px-2.5 py-1 rounded-md bg-teal-600 text-white font-mono font-bold text-xs">
-                  ₹{Number(provQuotedSetupFee).toLocaleString('en-IN')}
+                  {provCurrencySymbol}{Number(provQuotedSetupFee).toLocaleString('en-IN')}
                 </span>
               </div>
 
@@ -820,22 +835,40 @@ export const LeadsManagement: React.FC<LeadsManagementProps> = ({ onNavigate }) 
 
                 <div>
                   <label className="block text-slate-600 dark:text-slate-400 font-medium mb-1">
-                    State (GST Classification) *
+                    Country of Registration *
                   </label>
                   <select
-                    value={provState}
-                    onChange={(e) => setProvState(e.target.value)}
-                    required
+                    value={provCountry}
+                    onChange={(e) => handleProvCountryChange(e.target.value)}
                     className="w-full px-3 py-2 rounded-lg bg-[#F8FAFC] dark:bg-[#0C1017] border border-slate-200 dark:border-slate-800 text-slate-900 dark:text-white focus:outline-none focus:border-teal-500"
                   >
-                    <option value="">Select State / UT...</option>
-                    {INDIAN_STATES_LIST.map((s) => (
-                      <option key={s.code} value={s.name}>
-                        {s.code} - {s.name}
-                      </option>
+                    {SUPPORTED_COUNTRIES.map((c) => (
+                      <option key={c.code} value={c.code}>{c.name}</option>
                     ))}
                   </select>
+                  <p className="text-[10px] text-slate-400 mt-1">Country, state &amp; currency are locked after provisioning.</p>
                 </div>
+
+                {provShowState && (
+                  <div>
+                    <label className="block text-slate-600 dark:text-slate-400 font-medium mb-1">
+                      State {provCountry === 'US' ? '(Sales Tax Jurisdiction)' : '(GST Classification)'} *
+                    </label>
+                    <select
+                      value={provState}
+                      onChange={(e) => setProvState(e.target.value)}
+                      required
+                      className="w-full px-3 py-2 rounded-lg bg-[#F8FAFC] dark:bg-[#0C1017] border border-slate-200 dark:border-slate-800 text-slate-900 dark:text-white focus:outline-none focus:border-teal-500"
+                    >
+                      <option value="">{provCountry === 'US' ? 'Select US State...' : 'Select State / UT...'}</option>
+                      {provStateList.map((s) => (
+                        <option key={s.code} value={s.name}>
+                          {s.code} - {s.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
 
                 <div>
                   <label className="block text-slate-600 dark:text-slate-400 font-medium mb-1">
@@ -850,6 +883,16 @@ export const LeadsManagement: React.FC<LeadsManagementProps> = ({ onNavigate }) 
                     placeholder="e.g. 560001"
                     className="w-full px-3 py-2 rounded-lg bg-[#F8FAFC] dark:bg-[#0C1017] border border-slate-200 dark:border-slate-800 text-slate-900 dark:text-white font-mono focus:outline-none focus:border-teal-500"
                   />
+                </div>
+
+                <div>
+                  <label className="block text-slate-600 dark:text-slate-400 font-medium mb-1">
+                    Base Currency (Auto-Derived)
+                  </label>
+                  <div className="w-full px-3 py-2 rounded-lg bg-slate-100 dark:bg-[#0C1017] border border-slate-200 dark:border-slate-800 font-mono font-bold text-slate-500 dark:text-slate-400 flex items-center gap-2">
+                    <Lock className="w-3.5 h-3.5 shrink-0" />
+                    <span>{provDerivedCurrency} ({provCurrencySymbol}) — auto-derived from {provCountryName}</span>
+                  </div>
                 </div>
               </div>
 

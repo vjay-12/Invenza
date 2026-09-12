@@ -14,6 +14,8 @@ import {
 } from '../types/inventory';
 import { useAuth } from './AuthContext';
 import { api } from '../services/api';
+import { formatMoney } from '../data/platformConstants';
+import { TaxConfig, TaxRegime } from '../utils/taxUtils';
 
 interface InventoryContextType {
   products: Product[];
@@ -25,11 +27,14 @@ interface InventoryContextType {
   adjustments: AdjustmentRecord[];
   customFields: CustomFieldDefinition[];
   currency: CurrencyCode;
-  setCurrency: (c: CurrencyCode) => void;
+  countryCode: string;
+  taxType: TaxRegime;
+  taxRate: number;
+  taxLabel: string;
+  taxConfig: TaxConfig;
   selectedLocationId: string;
   setSelectedLocationId: (locId: string) => void;
   formatCurrency: (amount: number, fromCurrency?: CurrencyCode) => string;
-  convertAmount: (amount: number, fromCurrency?: CurrencyCode, toCurrency?: CurrencyCode) => number;
   
   // Actions
   addProduct: (product: Omit<Product, 'id' | 'currentStock' | 'locationStock' | 'createdAt' | 'isActive'>) => void;
@@ -59,7 +64,7 @@ interface InventoryContextType {
 const InventoryContext = createContext<InventoryContextType | undefined>(undefined);
 
 export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { user } = useAuth();
+  const { user, currencyCode, countryCode, taxType, taxRate, taxLabel, taxConfig } = useAuth();
   const currentTenantId = user?.tenantId || 'default';
 
   const isLoadedRef = useRef(false);
@@ -74,23 +79,13 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const [adjustments, setAdjustments] = useState<AdjustmentRecord[]>([]);
   const [customFields, setCustomFields] = useState<CustomFieldDefinition[]>([]);
 
-  const currency: CurrencyCode = 'INR';
+  // Tenant base currency is fixed at provisioning time (derived from country of registration).
+  const currency: CurrencyCode =
+    currencyCode && ['INR', 'EUR', 'USD'].includes(currencyCode)
+      ? (currencyCode as CurrencyCode)
+      : 'INR';
 
   const [selectedLocationId, setSelectedLocationId] = useState<string>('all');
-
-  // Platform standardized to INR base currency.
-  const convertAmount = (
-    amount: number,
-    _fromCurrency?: CurrencyCode,
-    _toCurrency?: CurrencyCode
-  ): number => {
-    const num = Number(amount);
-    return isNaN(num) ? 0 : num;
-  };
-
-  const setCurrency = (_targetCurrency: CurrencyCode) => {
-    // Non-interactive: Tenant Base Currency conversion is deferred
-  };
 
   // Helper to calculate stock from ledger movements with fallback
   const computeStock = (
@@ -236,8 +231,10 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
               reorderPoint: Number(bp.reorder_point),
               maxStock: bp.max_stock !== undefined && bp.max_stock !== null ? Number(bp.max_stock) : undefined,
               warehouseId: bp.warehouse_id || activeDefaultLocId,
-              hsnCode: bp.hsn_code || '8471',
-              gstRate: bp.gst_rate !== undefined && bp.gst_rate !== null ? Number(bp.gst_rate) : 18.0,
+              hsnCode: bp.hsn_code || bp.tax_code || '',
+              taxCode: bp.tax_code || bp.hsn_code || '',
+              gstRate: bp.gst_rate !== undefined && bp.gst_rate !== null ? Number(bp.gst_rate) : 0,
+              taxRate: bp.tax_rate !== undefined && bp.tax_rate !== null ? Number(bp.tax_rate) : (Number(bp.gst_rate) || 0),
               currentStock,
               locationStock,
               variantAttributes: bp.variant_attributes || {},
@@ -488,7 +485,6 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       setCustomFields([]);
     }
 
-    localStorage.removeItem('invenza_active_currency');
     // Trigger authoritative database sync
     syncBackend();
   }, [currentTenantId, syncBackend]);
@@ -508,13 +504,9 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     localStorage.setItem(`invenza_tenant_${currentTenantId}_custom_fields`, JSON.stringify(customFields));
   }, [products, locations, ledger, purchaseOrders, salesOrders, transfers, adjustments, customFields, currentTenantId]);
 
-  // Standard INR Currency Formatter
+  // Tenant currency formatter (currency is fixed per tenant; fromCurrency is accepted for call-site compatibility)
   const formatCurrency = (amount: number, _fromCurrency?: CurrencyCode): string => {
-    const num = Number(amount) || 0;
-    return `₹${num.toLocaleString('en-IN', {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    })}`;
+    return formatMoney(amount, currency);
   };
 
   // Helper to re-aggregate stock for a product from the immutable ledger
@@ -620,8 +612,10 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
           reorderPoint: Number(bp.reorder_point),
           maxStock: bp.max_stock !== undefined && bp.max_stock !== null ? Number(bp.max_stock) : undefined,
           warehouseId: bp.warehouse_id || locations[0]?.id || 'loc-01',
-          hsnCode: bp.hsn_code || '8471',
-          gstRate: bp.gst_rate !== undefined && bp.gst_rate !== null ? Number(bp.gst_rate) : 18.0,
+          hsnCode: bp.hsn_code || bp.tax_code || '',
+          taxCode: bp.tax_code || bp.hsn_code || '',
+          gstRate: bp.gst_rate !== undefined && bp.gst_rate !== null ? Number(bp.gst_rate) : (taxConfig.standardRate ?? 0),
+          taxRate: bp.tax_rate !== undefined && bp.tax_rate !== null ? Number(bp.tax_rate) : (Number(bp.gst_rate) || (taxConfig.standardRate ?? 0)),
           currentStock: Number(bp.current_stock || 0),
           locationStock: {},
           variantAttributes: bp.variant_attributes || {},
@@ -697,8 +691,10 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
           sell_price: data.sellPrice || 0,
           barcode: data.barcode || '',
           reorder_point: data.reorderPoint || 10,
-          hsn_code: data.hsnCode || '8471',
-          gst_rate: data.gstRate !== undefined ? data.gstRate : 18.0,
+          hsn_code: data.hsnCode || (data as any).taxCode || undefined,
+          tax_code: (data as any).taxCode || data.hsnCode || undefined,
+          gst_rate: data.gstRate !== undefined ? data.gstRate : ((data as any).taxRate !== undefined ? (data as any).taxRate : (taxConfig.standardRate ?? 0.0)),
+          tax_rate: (data as any).taxRate !== undefined ? (data as any).taxRate : (data.gstRate !== undefined ? data.gstRate : (taxConfig.standardRate ?? 0.0)),
           initial_stock: data.initialStock || 0,
           variant_attributes: data.variantAttributes || {},
           custom_fields: data.customFields || {},
@@ -850,6 +846,9 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       } else {
         await api.clearAllProducts();
       }
+      setProducts([]);
+      localStorage.setItem(`invenza_tenant_${currentTenantId}_products`, JSON.stringify([]));
+      await syncBackend();
     } catch (err) {
       console.warn('Backend clear all products warning:', err);
     }
@@ -1447,11 +1446,14 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         adjustments,
         customFields,
         currency,
-        setCurrency,
+        countryCode,
+        taxType,
+        taxRate,
+        taxLabel,
+        taxConfig,
         selectedLocationId,
         setSelectedLocationId,
         formatCurrency,
-        convertAmount,
         addProduct,
         bulkAddProducts,
         updateProduct,

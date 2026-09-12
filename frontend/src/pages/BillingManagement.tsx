@@ -18,7 +18,7 @@ import {
 import { api } from '../services/api';
 import { PageMeta } from '../components/common/PageMeta';
 import { SimpleSelectDropdown, DropdownOption } from '../components/common/SimpleSelectDropdown';
-import { INDUSTRIES_LIST } from '../data/platformConstants';
+import { INDUSTRIES_LIST, formatMoney, CURRENCY_SYMBOLS } from '../data/platformConstants';
 
 interface BillingManagementProps {
   orgId?: string;
@@ -343,7 +343,7 @@ export const BillingManagement: React.FC<BillingManagementProps> = ({ orgId, onN
         effective_from: rateEffectiveDate || undefined,
         reason: rateChangeReason.trim() || undefined,
       });
-      showToast(`Monthly maintenance rate updated to ₹${rate.toLocaleString('en-IN')}/mo. New history row appended.`, 'success');
+      showToast(`Monthly maintenance rate updated to ${formatMoney(rate, orgBillingDetail?.currency_code || 'INR')}/mo. New history row appended.`, 'success');
       setIsUpdateRateModalOpen(false);
       loadOrgDetail(selectedOrgId);
       loadOverview();
@@ -367,6 +367,14 @@ export const BillingManagement: React.FC<BillingManagementProps> = ({ orgId, onN
     { value: 'all', label: 'All Industries' },
     ...INDUSTRIES_LIST.map((ind) => ({ value: ind, label: ind })),
   ];
+
+  const revenueByCurrency: Record<string, number> = overviewData?.revenue_by_currency || {};
+  const mrrByCurrency: Record<string, number> = overviewData?.mrr_by_currency || {};
+  const revenueCurrencyKeys = Object.keys(revenueByCurrency);
+  const mrrCurrencyKeys = Object.keys(mrrByCurrency);
+
+  const drillCurrencyCode: string = orgBillingDetail?.currency_code || 'INR';
+  const drillCurrencySymbol = CURRENCY_SYMBOLS[drillCurrencyCode] || '₹';
 
   return (
     <div className="flex-1 flex flex-col h-full bg-[#F4F6F9] dark:bg-[#0B0F17] text-slate-900 dark:text-slate-100 overflow-hidden font-sans">
@@ -424,9 +432,19 @@ export const BillingManagement: React.FC<BillingManagementProps> = ({ orgId, onN
             {/* 1. Total Revenue Collected */}
             <div className="p-3.5 rounded-xl bg-white dark:bg-[#131924] border border-slate-200 dark:border-slate-800 shadow-card flex flex-col justify-between">
               <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">Total Revenue Collected</span>
-              <div className="text-lg sm:text-xl font-mono font-bold text-slate-900 dark:text-white mt-1">
-                ₹{Number(overviewData?.total_revenue_collected || 0).toLocaleString('en-IN')}
-              </div>
+              {revenueCurrencyKeys.length > 1 ? (
+                <div className="mt-1 space-y-0.5">
+                  {revenueCurrencyKeys.map((cur) => (
+                    <div key={cur} className="text-sm sm:text-base font-mono font-bold text-slate-900 dark:text-white">
+                      {formatMoney(revenueByCurrency[cur] || 0, cur)}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-lg sm:text-xl font-mono font-bold text-slate-900 dark:text-white mt-1">
+                  {formatMoney(overviewData?.total_revenue_collected || 0, revenueCurrencyKeys[0] || 'INR')}
+                </div>
+              )}
               <span className="text-[10px] text-slate-400 font-mono mt-1">Paid Setup + Paid Cycles</span>
             </div>
 
@@ -434,7 +452,10 @@ export const BillingManagement: React.FC<BillingManagementProps> = ({ orgId, onN
             <div className="p-3.5 rounded-xl bg-amber-50/50 dark:bg-amber-950/20 border border-amber-200/80 dark:border-amber-500/20 shadow-card flex flex-col justify-between">
               <span className="text-[11px] font-semibold text-amber-700 dark:text-amber-400">Pending Setup Fees</span>
               <div className="text-lg sm:text-xl font-mono font-bold text-amber-700 dark:text-amber-300 mt-1">
-                ₹{Number(overviewData?.pending_setup_fees_amount ?? overviewData?.pending_setup_fees ?? 0).toLocaleString('en-IN')}
+                {formatMoney(
+                  overviewData?.pending_setup_fees_amount ?? overviewData?.pending_setup_fees ?? 0,
+                  revenueCurrencyKeys.length === 1 ? revenueCurrencyKeys[0] : 'INR'
+                )}
               </div>
               <span className="text-[10px] text-amber-600/80 dark:text-amber-400/80 font-mono mt-1">
                 {overviewData?.pending_setup_fees_count ?? 0} Orgs Awaiting Payment
@@ -444,9 +465,22 @@ export const BillingManagement: React.FC<BillingManagementProps> = ({ orgId, onN
             {/* 3. Active Monthly Recurring (Sum of rates) */}
             <div className="p-3.5 rounded-xl bg-teal-50/50 dark:bg-teal-950/20 border border-teal-200/80 dark:border-teal-500/20 shadow-card flex flex-col justify-between">
               <span className="text-[11px] font-semibold text-teal-700 dark:text-teal-400">Active Monthly Recurring</span>
-              <div className="text-lg sm:text-xl font-mono font-bold text-teal-700 dark:text-teal-300 mt-1">
-                ₹{Number(overviewData?.active_monthly_recurring ?? overviewData?.active_mrr_sum ?? 0).toLocaleString('en-IN')}
-              </div>
+              {mrrCurrencyKeys.length > 1 ? (
+                <div className="mt-1 space-y-0.5">
+                  {mrrCurrencyKeys.map((cur) => (
+                    <div key={cur} className="text-sm sm:text-base font-mono font-bold text-teal-700 dark:text-teal-300">
+                      {formatMoney(mrrByCurrency[cur] || 0, cur)}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-lg sm:text-xl font-mono font-bold text-teal-700 dark:text-teal-300 mt-1">
+                  {formatMoney(
+                    overviewData?.active_monthly_recurring ?? overviewData?.active_mrr_sum ?? 0,
+                    mrrCurrencyKeys[0] || 'INR'
+                  )}
+                </div>
+              )}
               <span className="text-[10px] text-teal-600/80 dark:text-teal-400/80 font-mono mt-1">Sum of Active Plan Rates</span>
             </div>
 
@@ -573,7 +607,7 @@ export const BillingManagement: React.FC<BillingManagementProps> = ({ orgId, onN
                                 {org.setup_fee_status?.toUpperCase()}
                               </span>
                               <span className="text-[11px] font-mono font-semibold text-slate-700 dark:text-slate-300">
-                                ₹{Number(org.setup_fee_amount || org.setup_fee || 0).toLocaleString('en-IN')}
+                                {formatMoney(org.setup_fee_amount || org.setup_fee || 0, org.currency_code || 'INR')}
                               </span>
                             </div>
                           </td>
@@ -582,7 +616,7 @@ export const BillingManagement: React.FC<BillingManagementProps> = ({ orgId, onN
                           <td className="h-[52px] py-0 px-3 align-middle text-center whitespace-nowrap">
                             <div className="h-full flex flex-col items-center justify-center min-w-0 font-mono">
                               <div className="font-bold text-xs text-slate-900 dark:text-white">
-                                ₹{Number(org.current_monthly_rate || org.monthly_maintenance_fee || 0).toLocaleString('en-IN')}
+                                {formatMoney(org.current_monthly_rate || org.monthly_maintenance_fee || 0, org.currency_code || 'INR')}
                                 <span className="text-[10px] font-normal text-slate-400"> / mo</span>
                               </div>
                               {Number(org.current_monthly_rate || org.monthly_maintenance_fee || 0) === 0 && (
@@ -708,7 +742,7 @@ export const BillingManagement: React.FC<BillingManagementProps> = ({ orgId, onN
                     <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400 mt-0.5">
                       <span>{orgBillingDetail.industry}</span>
                       <span>&bull;</span>
-                      <span>INR (₹) Commercial Agreement</span>
+                      <span>{drillCurrencyCode} ({drillCurrencySymbol}) Commercial Agreement</span>
                     </div>
                   </div>
                 </div>
@@ -768,7 +802,7 @@ export const BillingManagement: React.FC<BillingManagementProps> = ({ orgId, onN
 
                     <div className="py-4 flex items-baseline justify-between">
                       <span className="text-2xl sm:text-3xl font-mono font-bold text-slate-900 dark:text-white">
-                        ₹{Number(orgBillingDetail.setup_fee?.amount || 0).toLocaleString('en-IN')}
+                        {formatMoney(orgBillingDetail.setup_fee?.amount || 0, drillCurrencyCode)}
                       </span>
                       <span
                         className={`inline-flex items-center px-2 py-0.5 rounded text-[11px] font-mono font-bold border ${
@@ -836,12 +870,12 @@ export const BillingManagement: React.FC<BillingManagementProps> = ({ orgId, onN
 
                     <div className="py-4 flex items-baseline justify-between">
                       <span className="text-2xl sm:text-3xl font-mono font-bold text-teal-700 dark:text-teal-400">
-                        ₹{Number(orgBillingDetail.current_plan?.current_rate || 0).toLocaleString('en-IN')}{' '}
+                        {formatMoney(orgBillingDetail.current_plan?.current_rate || 0, drillCurrencyCode)}{' '}
                         <span className="text-sm font-normal text-slate-400">/ mo</span>
                       </span>
                       {Number(orgBillingDetail.current_plan?.current_rate || 0) === 0 ? (
                         <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-sky-500/10 text-sky-600 dark:text-sky-400 border border-sky-500/25">
-                          WAIVED (₹0 TIER)
+                          WAIVED ({drillCurrencySymbol}0 TIER)
                         </span>
                       ) : (
                         <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-teal-500/10 text-teal-700 dark:text-teal-400 border border-teal-500/25">
@@ -866,7 +900,7 @@ export const BillingManagement: React.FC<BillingManagementProps> = ({ orgId, onN
                             >
                               <div>
                                 <span className="font-mono font-bold text-slate-900 dark:text-white">
-                                  ₹{Number(plan.current_rate || 0).toLocaleString('en-IN')}/mo
+                                  {formatMoney(plan.current_rate || 0, drillCurrencyCode)}/mo
                                 </span>
                                 <span className="text-[10px] text-slate-400 ml-2">
                                   Effective from {new Date(plan.effective_from).toLocaleDateString()}
@@ -894,7 +928,7 @@ export const BillingManagement: React.FC<BillingManagementProps> = ({ orgId, onN
                     </span>
                   </div>
                   <span className="text-[11px] text-slate-400 font-mono">
-                    All amounts strictly in INR (₹)
+                    All amounts in {drillCurrencyCode} ({drillCurrencySymbol})
                   </span>
                 </div>
 
@@ -903,7 +937,7 @@ export const BillingManagement: React.FC<BillingManagementProps> = ({ orgId, onN
                     <thead className="bg-[#F8FAFC] dark:bg-[#0C1017] border-b border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 font-semibold text-[10px] uppercase tracking-wider">
                       <tr>
                         <th className="w-[20%] px-4 py-3">Item / Cycle</th>
-                        <th className="w-[12%] px-4 py-3">Amount (INR)</th>
+                        <th className="w-[12%] px-4 py-3">Amount</th>
                         <th className="w-[10%] px-4 py-3">Status</th>
                         <th className="w-[13%] px-4 py-3">Payment Mode</th>
                         <th className="w-[13%] px-4 py-3">Date</th>
@@ -939,9 +973,9 @@ export const BillingManagement: React.FC<BillingManagementProps> = ({ orgId, onN
                                 </div>
                               </td>
 
-                              {/* Amount in INR */}
+                              {/* Amount in org currency */}
                               <td className="px-4 py-3 font-mono font-bold text-slate-900 dark:text-white">
-                                ₹{Number(tx.amount || 0).toLocaleString('en-IN')}
+                                {formatMoney(tx.amount || 0, drillCurrencyCode)}
                               </td>
 
                               {/* Status Badge */}
@@ -1081,10 +1115,10 @@ export const BillingManagement: React.FC<BillingManagementProps> = ({ orgId, onN
 
               <div>
                 <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  Confirmed Amount (₹) *
+                  Confirmed Amount ({drillCurrencySymbol}) *
                 </label>
                 <div className="relative">
-                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400">₹</span>
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400">{drillCurrencySymbol}</span>
                   <input
                     type="number"
                     required
@@ -1252,10 +1286,10 @@ export const BillingManagement: React.FC<BillingManagementProps> = ({ orgId, onN
 
               <div>
                 <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  New Agreed Monthly Rate (₹) *
+                  New Agreed Monthly Rate ({drillCurrencySymbol}) *
                 </label>
                 <div className="relative">
-                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400">₹</span>
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400">{drillCurrencySymbol}</span>
                   <input
                     type="number"
                     required
@@ -1266,7 +1300,7 @@ export const BillingManagement: React.FC<BillingManagementProps> = ({ orgId, onN
                     className="w-full pl-7 pr-3 py-2 rounded-xl bg-[#F4F5F8] dark:bg-[#0C1017] border border-slate-200 dark:border-slate-800 text-xs font-mono font-bold text-slate-900 dark:text-white focus:outline-none focus:border-teal-500"
                   />
                 </div>
-                <p className="text-[10px] text-slate-400 mt-1">Can be ₹0 for promotional/free SLA periods.</p>
+                <p className="text-[10px] text-slate-400 mt-1">Can be 0 for promotional/free SLA periods.</p>
               </div>
 
               <div>

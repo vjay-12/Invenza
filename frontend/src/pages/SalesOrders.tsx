@@ -37,6 +37,7 @@ export const SalesOrders: React.FC = () => {
     formatCurrency,
     createSalesOrder,
     fulfillSalesOrder,
+    taxConfig,
   } = useInventory();
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -328,7 +329,7 @@ export const SalesOrders: React.FC = () => {
                 Order {fulfilledInvoiceNotice.soNumber} Dispatched & Invoiced!
               </div>
               <div className="text-xs text-teal-800 dark:text-teal-200">
-                GST Tax Invoice <span className="font-mono font-bold text-teal-900 dark:text-teal-300">{fulfilledInvoiceNotice.invoiceNumber}</span> has been sequentially issued and archived.
+                {taxConfig.invoiceTitle} <span className="font-mono font-bold text-teal-900 dark:text-teal-300">{fulfilledInvoiceNotice.invoiceNumber}</span> has been sequentially issued and archived.
               </div>
             </div>
           </div>
@@ -582,7 +583,7 @@ export const SalesOrders: React.FC = () => {
                           onClick={() => handleDownloadOrderPdf(so)}
                           disabled={downloadingSoId === so.id}
                           className="flex items-center gap-1 rounded border border-teal-600/30 bg-teal-500/10 hover:bg-teal-500/20 px-2.5 py-1 text-[11px] font-semibold text-teal-700 dark:text-teal-300 transition-colors shadow-subtle whitespace-nowrap shrink-0"
-                          title="Download GST Tax Invoice PDF from MinIO"
+                          title={`Download ${taxConfig.invoiceTitle} PDF from MinIO`}
                         >
                           <IconDownload className="h-3 w-3" />
                           <span>{downloadingSoId === so.id ? 'Downloading...' : 'Tax Invoice'}</span>
@@ -698,7 +699,7 @@ export const SalesOrders: React.FC = () => {
                       </span>
                     </div>
                     <div>
-                      <span className="text-slate-400 text-[11px] block">Customer GSTIN:</span>
+                      <span className="text-slate-400 text-[11px] block">Customer {taxConfig.taxIdLabel}:</span>
                       <span className="font-mono text-slate-700 dark:text-slate-300 font-semibold">
                         {selectedOrderForDetail.customerGstin || 'Unregistered Consumer / Retail'}
                       </span>
@@ -988,14 +989,14 @@ export const SalesOrders: React.FC = () => {
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <div>
                 <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1">
-                  Customer GSTIN (Optional)
+                  Customer {taxConfig.taxIdLabel} (Optional)
                 </label>
                 <input
                   type="text"
-                  maxLength={15}
+                  maxLength={18}
                   value={customerGstin}
                   onChange={(e) => setCustomerGstin(e.target.value.toUpperCase())}
-                  placeholder="e.g. 29ABCDE1234F1Z5"
+                  placeholder={taxConfig.taxType === 'VAT' ? 'e.g. DE123456789' : taxConfig.taxType === 'SALES_TAX' ? 'e.g. 95-1234567' : 'e.g. 29ABCDE1234F1Z5'}
                   className="w-full rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#131924] px-2.5 py-1.5 text-xs font-mono uppercase focus:outline-none focus:ring-1 focus:ring-teal-600"
                 />
               </div>
@@ -1056,7 +1057,7 @@ export const SalesOrders: React.FC = () => {
                       }}
                     />
                     <span className="text-[10px] text-teal-600 dark:text-teal-400 mt-0.5 block">
-                      Determines Place of Supply for GST calculation when shipping differs
+                      Determines Place of Supply for {taxConfig.taxLabel} calculation when shipping differs
                     </span>
                   </div>
                   <div>
@@ -1260,7 +1261,7 @@ export const SalesOrders: React.FC = () => {
                   <span className="font-mono">{formatCurrency(calculateTotalGross())}</span>
                 </div>
                 <div className="flex items-center justify-between text-xs text-emerald-600 dark:text-emerald-400">
-                  <span>Total Trade Discount (Deducted Pre-GST)</span>
+                  <span>Total Trade Discount (Deducted Pre-{taxConfig.taxLabel})</span>
                   <span className="font-mono font-medium">-{formatCurrency(calculateTotalDiscount())}</span>
                 </div>
               </>
@@ -1274,7 +1275,7 @@ export const SalesOrders: React.FC = () => {
               </span>
             </div>
             <p className="text-[10px] text-slate-400">
-              * Note: Trade discount is deducted before GST calculation as per Section 15 of CGST Act. Applicable taxes are generated upon dispatch.
+              * Note: Trade discount is deducted before {taxConfig.taxLabel} calculation. Applicable taxes are generated upon dispatch.
             </p>
           </div>
 

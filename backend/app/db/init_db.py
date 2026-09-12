@@ -8,7 +8,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 import asyncio
-from datetime import datetime
+from datetime import datetime, date
 from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, text, func, and_
@@ -24,6 +24,7 @@ from app.models.invoice import TenantSettings, TenantInvoiceSequence, Customer, 
 from app.models.lead import LeadInquiry
 from app.models.audit_log import AuditLog
 from app.models.security_request import SecurityApprovalRequest
+from app.models.tax_reference import TaxReference
 from app.models.billing import (
     TenantBillingProfile,
     BillingFeeHistory,
@@ -154,11 +155,28 @@ async def migrate_columns():
             except Exception as e:
                 print(f"[Schema Migration Warning - lead_inquiries]: {e}")
 
-        # Alter tenant_settings for pincode
-        try:
-            await conn.execute(text("ALTER TABLE tenant_settings ADD COLUMN IF NOT EXISTS pincode VARCHAR(10) DEFAULT '560103';"))
-        except Exception as e:
-            print(f"[Schema Migration Warning - tenant_settings pincode]: {e}")
+        # Alter tenant_settings for international multi-regime support
+        alter_tenant_settings = [
+            "ALTER TABLE tenant_settings ADD COLUMN IF NOT EXISTS pincode VARCHAR(20) DEFAULT '560103';",
+            "ALTER TABLE tenant_settings ALTER COLUMN pan TYPE VARCHAR(50);",
+            "ALTER TABLE tenant_settings ALTER COLUMN gstin TYPE VARCHAR(50);",
+            "ALTER TABLE tenant_settings ALTER COLUMN state_code TYPE VARCHAR(10);",
+            "ALTER TABLE tenant_settings ALTER COLUMN pincode TYPE VARCHAR(20);",
+            # Sanitize legacy dummy PAN seeds for non-Indian tenants
+            """
+            UPDATE tenant_settings
+            SET pan = ''
+            FROM tenants
+            WHERE tenant_settings.tenant_id = tenants.id
+              AND tenants.country_code != 'IN'
+              AND tenant_settings.pan = 'AABCI1234F';
+            """,
+        ]
+        for stmt in alter_tenant_settings:
+            try:
+                await conn.execute(text(stmt))
+            except Exception as e:
+                print(f"[Schema Migration Warning - tenant_settings]: {e}")
 
         # Alter billing_payment_records for GST tax and sequential invoice fields
         alter_billing_payments = [
@@ -243,6 +261,101 @@ async def migrate_columns():
                 await conn.execute(text(stmt))
             except Exception as e:
                 print(f"[Schema Migration Warning - create_billing_tables]: {e}")
+
+        # Multi-currency / multi-tax: region code on tenants, tax regime columns on invoices
+        alter_multitax = [
+            "ALTER TABLE tenants ADD COLUMN IF NOT EXISTS country_code VARCHAR(2) DEFAULT 'IN';",
+            "UPDATE tenants SET country_code = 'IN' WHERE country_code IS NULL;",
+            # COALESCE expression index: plain unique constraints treat NULL state_code (EU rows) as distinct
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_tax_reference_country_state ON tax_reference (country_code, COALESCE(state_code, ''));",
+            "ALTER TABLE invoices ADD COLUMN IF NOT EXISTS tax_type VARCHAR(20) DEFAULT 'GST';",
+            "UPDATE invoices SET tax_type = 'GST' WHERE tax_type IS NULL;",
+            "ALTER TABLE invoices ADD COLUMN IF NOT EXISTS currency_code VARCHAR(10) DEFAULT 'INR';",
+            "UPDATE invoices SET currency_code = 'INR' WHERE currency_code IS NULL;",
+            "ALTER TABLE invoices ADD COLUMN IF NOT EXISTS total_single_tax NUMERIC(14,2) DEFAULT 0.00;",
+            "ALTER TABLE invoice_items ADD COLUMN IF NOT EXISTS single_tax_rate NUMERIC(5,2) DEFAULT 0.00;",
+            "ALTER TABLE invoice_items ADD COLUMN IF NOT EXISTS single_tax_amount NUMERIC(12,2) DEFAULT 0.00;",
+        ]
+        for stmt in alter_multitax:
+            try:
+                await conn.execute(text(stmt))
+            except Exception as e:
+                print(f"[Schema Migration Warning - multitax]: {e}")
+
+
+# ═════════════════════════════════════════════════════════════════════════════════════
+# TAX REFERENCE SEED DATA — Country/State-keyed (currency is display-only)
+#
+# ⚠️ RE-VERIFICATION REQUIRED: these rates are point-in-time seed values from official
+# sources (EU: European Commission "VAT rules and rates" / Taxes in Europe Database;
+# US: state Departments of Revenue). There is NO live rate API — re-check and update
+# rows periodically (UPDATE tax_reference SET tax_rate, last_verified_date, ...).
+# Adding a new country/state = insert a row here (data change, no code change).
+# ═════════════════════════════════════════════════════════════════════════════════════
+TAX_REFERENCE_SEED = [
+    # EU — VAT (single standard rate per country; state_code NULL)
+    {"country_code": "DE", "state_code": None, "tax_type": "VAT", "tax_rate": 19.00, "currency": "EUR", "sourcing_rule": None, "source_reference": "European Commission — VAT rules and rates / TEDB (Germany standard VAT)"},
+    {"country_code": "FR", "state_code": None, "tax_type": "VAT", "tax_rate": 20.00, "currency": "EUR", "sourcing_rule": None, "source_reference": "European Commission — VAT rules and rates / TEDB (France standard VAT)"},
+    {"country_code": "NL", "state_code": None, "tax_type": "VAT", "tax_rate": 21.00, "currency": "EUR", "sourcing_rule": None, "source_reference": "European Commission — VAT rules and rates / TEDB (Netherlands standard VAT)"},
+    {"country_code": "IE", "state_code": None, "tax_type": "VAT", "tax_rate": 23.00, "currency": "EUR", "sourcing_rule": None, "source_reference": "European Commission — VAT rules and rates / TEDB (Ireland standard VAT)"},
+    {"country_code": "ES", "state_code": None, "tax_type": "VAT", "tax_rate": 21.00, "currency": "EUR", "sourcing_rule": None, "source_reference": "European Commission — VAT rules and rates / TEDB (Spain standard VAT)"},
+    {"country_code": "IT", "state_code": None, "tax_type": "VAT", "tax_rate": 22.00, "currency": "EUR", "sourcing_rule": None, "source_reference": "European Commission — VAT rules and rates / TEDB (Italy standard VAT)"},
+    {"country_code": "BE", "state_code": None, "tax_type": "VAT", "tax_rate": 21.00, "currency": "EUR", "sourcing_rule": None, "source_reference": "European Commission — VAT rules and rates / TEDB (Belgium standard VAT)"},
+    {"country_code": "PL", "state_code": None, "tax_type": "VAT", "tax_rate": 23.00, "currency": "EUR", "sourcing_rule": None, "source_reference": "European Commission — VAT rules and rates / TEDB (Poland standard VAT)"},
+    {"country_code": "SE", "state_code": None, "tax_type": "VAT", "tax_rate": 25.00, "currency": "EUR", "sourcing_rule": None, "source_reference": "European Commission — VAT rules and rates / TEDB (Sweden standard VAT)"},
+    {"country_code": "LU", "state_code": None, "tax_type": "VAT", "tax_rate": 17.00, "currency": "EUR", "sourcing_rule": None, "source_reference": "European Commission — VAT rules and rates / TEDB (Luxembourg standard VAT)"},
+    # US — Sales Tax (state-level rate only; local surcharges out of scope)
+    {"country_code": "US", "state_code": "CA", "tax_type": "SALES_TAX", "tax_rate": 7.25, "currency": "USD", "sourcing_rule": "destination", "source_reference": "California Department of Tax and Fee Administration — state sales tax rate"},
+    {"country_code": "US", "state_code": "TX", "tax_type": "SALES_TAX", "tax_rate": 6.25, "currency": "USD", "sourcing_rule": "destination", "source_reference": "Texas Comptroller of Public Accounts — state sales tax rate"},
+    {"country_code": "US", "state_code": "NY", "tax_type": "SALES_TAX", "tax_rate": 4.00, "currency": "USD", "sourcing_rule": "destination", "source_reference": "New York State Department of Taxation and Finance — state sales tax rate"},
+    {"country_code": "US", "state_code": "FL", "tax_type": "SALES_TAX", "tax_rate": 6.00, "currency": "USD", "sourcing_rule": "destination", "source_reference": "Florida Department of Revenue — state sales tax rate"},
+    {"country_code": "US", "state_code": "IL", "tax_type": "SALES_TAX", "tax_rate": 6.25, "currency": "USD", "sourcing_rule": "destination", "source_reference": "Illinois Department of Revenue — state sales tax rate"},
+    {"country_code": "US", "state_code": "WA", "tax_type": "SALES_TAX", "tax_rate": 6.50, "currency": "USD", "sourcing_rule": "destination", "source_reference": "Washington Department of Revenue — state sales tax rate"},
+    {"country_code": "US", "state_code": "GA", "tax_type": "SALES_TAX", "tax_rate": 4.00, "currency": "USD", "sourcing_rule": "destination", "source_reference": "Georgia Department of Revenue — state sales tax rate"},
+    {"country_code": "US", "state_code": "OH", "tax_type": "SALES_TAX", "tax_rate": 5.75, "currency": "USD", "sourcing_rule": "origin", "source_reference": "Ohio Department of Taxation — state sales tax rate (origin-sourcing state)"},
+    {"country_code": "US", "state_code": "DE", "tax_type": "SALES_TAX", "tax_rate": 0.00, "currency": "USD", "sourcing_rule": "destination", "is_zero_rate": True, "source_reference": "Delaware Department of Finance — no state sales tax (0% must still render on invoices)"},
+    {"country_code": "US", "state_code": "OR", "tax_type": "SALES_TAX", "tax_rate": 0.00, "currency": "USD", "sourcing_rule": "destination", "is_zero_rate": True, "source_reference": "Oregon Department of Revenue — no state sales tax (0% must still render on invoices)"},
+]
+
+# India is intentionally absent: Indian GST stays product-rate-driven (CGST/SGST vs IGST)
+# via GSTService, unchanged by this table.
+
+
+async def seed_tax_reference_table(session: AsyncSession) -> None:
+    """Idempotent upsert of TAX_REFERENCE_SEED rows (rate refresh on re-run)."""
+    today = date.today()
+    inserted = updated = 0
+    for row in TAX_REFERENCE_SEED:
+        q = select(TaxReference).where(TaxReference.country_code == row["country_code"])
+        if row["state_code"]:
+            q = q.where(TaxReference.state_code == row["state_code"])
+        else:
+            q = q.where(TaxReference.state_code.is_(None))
+        existing = (await session.execute(q)).scalar_one_or_none()
+        if existing:
+            existing.tax_type = row["tax_type"]
+            existing.tax_rate = row["tax_rate"]
+            existing.currency = row["currency"]
+            existing.is_zero_rate = row.get("is_zero_rate", False)
+            existing.sourcing_rule = row.get("sourcing_rule")
+            existing.last_verified_date = today
+            existing.source_reference = row["source_reference"]
+            updated += 1
+        else:
+            session.add(TaxReference(
+                country_code=row["country_code"],
+                state_code=row["state_code"],
+                tax_type=row["tax_type"],
+                tax_rate=row["tax_rate"],
+                currency=row["currency"],
+                is_zero_rate=row.get("is_zero_rate", False),
+                sourcing_rule=row.get("sourcing_rule"),
+                last_verified_date=today,
+                source_reference=row["source_reference"],
+            ))
+            inserted += 1
+    await session.flush()
+    print(f"Tax reference seed complete: {inserted} inserted, {updated} refreshed.")
 
 
 async def init_db():
@@ -430,6 +543,9 @@ async def init_db():
                     note=f"Monthly maintenance cycle for {current_month_str}",
                 ))
 
+
+        # 8b. Seed / refresh regional tax reference rows (EU VAT, US sales tax)
+        await seed_tax_reference_table(session)
 
         # 8. Seed initial AuditLog entries if table is empty
         audit_count_res = await session.execute(select(func.count(AuditLog.id)))

@@ -28,6 +28,7 @@ from app.schemas.user import (
     ResetPasswordRequest,
 )
 from app.services.email_service import EmailService
+from app.services.tax_service import get_org_tax_context, tax_ref_type, TAX_LABELS
 
 router = APIRouter()
 
@@ -195,6 +196,27 @@ async def login(credentials: UserLogin, db: AsyncSession = Depends(get_db)):
         role=user.role,
     )
 
+    tax_type = "GST"
+    tax_rate = 18.0
+    tax_label = "GST"
+    tenant_state = tenant.state if tenant else None
+    if tenant:
+        try:
+            ctx = await get_org_tax_context(db, tenant.id)
+            tax_type = ctx.get("tax_type") or tax_ref_type(tenant.country_code)
+            if ctx.get("tax_ref"):
+                tax_rate = float(ctx["tax_ref"].tax_rate)
+            elif tax_type == "GST":
+                tax_rate = 18.0
+            else:
+                tax_rate = 0.0
+            tax_label = TAX_LABELS.get(tax_type, tax_type)
+            tenant_state = ctx.get("state_name") or tenant.state
+        except Exception:
+            tax_type = tax_ref_type(tenant.country_code or "IN")
+            tax_label = TAX_LABELS.get(tax_type, tax_type)
+            tax_rate = 19.0 if tax_type == "VAT" else (7.25 if tax_type == "SALES_TAX" else 18.0)
+
     return Token(
         access_token=token,
         token_type="bearer",
@@ -206,6 +228,12 @@ async def login(credentials: UserLogin, db: AsyncSession = Depends(get_db)):
         industry=industry,
         enabled_modules=enabled_modules,
         permissions=user.permissions or [],
+        currency_code=(tenant.currency_code or "INR") if tenant else "INR",
+        country_code=(tenant.country_code or "IN") if tenant else "IN",
+        state=tenant_state,
+        tax_type=tax_type,
+        tax_rate=tax_rate,
+        tax_label=tax_label,
     )
 
 @router.post("/forgot-password")
@@ -231,9 +259,9 @@ async def forgot_password(req: ForgotPasswordRequest, db: AsyncSession = Depends
         asyncio.create_task(
             EmailService.send_password_reset_otp(
                 user_name=user.full_name,
-                user_email=user.email,
-                otp=otp,
-                expires_in_minutes=10,
+                recipient_email=user.email,
+                otp_code=otp,
+                ttl_minutes=10,
             )
         )
 
@@ -340,6 +368,27 @@ async def get_current_user_profile(
                     if user:
                         tenant_res = await db.execute(select(Tenant).where(Tenant.id == user.tenant_id))
                         tenant = tenant_res.scalar_one_or_none()
+                        tax_type = "GST"
+                        tax_rate = 18.0
+                        tax_label = "GST"
+                        tenant_state = tenant.state if tenant else None
+                        if tenant:
+                            try:
+                                ctx = await get_org_tax_context(db, tenant.id)
+                                tax_type = ctx.get("tax_type") or tax_ref_type(tenant.country_code)
+                                if ctx.get("tax_ref"):
+                                    tax_rate = float(ctx["tax_ref"].tax_rate)
+                                elif tax_type == "GST":
+                                    tax_rate = 18.0
+                                else:
+                                    tax_rate = 0.0
+                                tax_label = TAX_LABELS.get(tax_type, tax_type)
+                                tenant_state = ctx.get("state_name") or tenant.state
+                            except Exception:
+                                tax_type = tax_ref_type(tenant.country_code or "IN")
+                                tax_label = TAX_LABELS.get(tax_type, tax_type)
+                                tax_rate = 19.0 if tax_type == "VAT" else (7.25 if tax_type == "SALES_TAX" else 18.0)
+
                         return {
                             "id": str(user.id),
                             "email": user.email,
@@ -350,6 +399,12 @@ async def get_current_user_profile(
                             "company_name": tenant.name if tenant else "Invenza Enterprise",
                             "industry": tenant.industry if tenant else "General",
                             "enabled_modules": tenant.enabled_modules if tenant else [],
+                            "currency_code": (tenant.currency_code or "INR") if tenant else "INR",
+                            "country_code": (tenant.country_code or "IN") if tenant else "IN",
+                            "state": tenant_state,
+                            "tax_type": tax_type,
+                            "tax_rate": tax_rate,
+                            "tax_label": tax_label,
                             "is_active": user.is_active,
                         }
                 except Exception:

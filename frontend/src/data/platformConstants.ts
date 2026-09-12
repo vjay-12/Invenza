@@ -28,6 +28,80 @@ export interface IndianState {
   name: string;
 }
 
+export interface SupportedCountry {
+  code: string;
+  name: string;
+}
+
+export const SUPPORTED_COUNTRIES: SupportedCountry[] = [
+  { code: 'IN', name: 'India' },
+  { code: 'DE', name: 'Germany' },
+  { code: 'FR', name: 'France' },
+  { code: 'NL', name: 'Netherlands' },
+  { code: 'IE', name: 'Ireland' },
+  { code: 'ES', name: 'Spain' },
+  { code: 'IT', name: 'Italy' },
+  { code: 'BE', name: 'Belgium' },
+  { code: 'PL', name: 'Poland' },
+  { code: 'SE', name: 'Sweden' },
+  { code: 'LU', name: 'Luxembourg' },
+  { code: 'US', name: 'United States' },
+];
+
+export interface UsState {
+  code: string;
+  name: string;
+}
+
+export const US_STATES_LIST: UsState[] = [
+  { code: 'CA', name: 'California' },
+  { code: 'TX', name: 'Texas' },
+  { code: 'NY', name: 'New York' },
+  { code: 'FL', name: 'Florida' },
+  { code: 'IL', name: 'Illinois' },
+  { code: 'WA', name: 'Washington' },
+  { code: 'GA', name: 'Georgia' },
+  { code: 'OH', name: 'Ohio' },
+  { code: 'DE', name: 'Delaware' },
+  { code: 'OR', name: 'Oregon' },
+];
+
+// Currency is always derived server-side from the country of registration.
+export const COUNTRY_CURRENCY_MAP: Record<string, string> = {
+  IN: 'INR',
+  US: 'USD',
+  DE: 'EUR',
+  FR: 'EUR',
+  NL: 'EUR',
+  IE: 'EUR',
+  ES: 'EUR',
+  IT: 'EUR',
+  BE: 'EUR',
+  PL: 'EUR',
+  SE: 'EUR',
+  LU: 'EUR',
+};
+
+export const CURRENCY_SYMBOLS: Record<string, string> = {
+  INR: '₹',
+  EUR: '€',
+  USD: '$',
+};
+
+export function currencySymbolFor(countryCode: string): string {
+  return CURRENCY_SYMBOLS[COUNTRY_CURRENCY_MAP[countryCode] || 'INR'] || '₹';
+}
+
+export function formatMoney(amount: number | null | undefined, currencyCode: string = 'INR'): string {
+  const num = Number(amount);
+  const safeAmount = isNaN(num) ? 0 : num;
+  const symbol = CURRENCY_SYMBOLS[currencyCode] || CURRENCY_SYMBOLS.INR;
+  return `${symbol}${safeAmount.toLocaleString(currencyCode === 'INR' ? 'en-IN' : 'en-US', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
+}
+
 export const INDIAN_STATES_LIST: IndianState[] = [
   { code: '01', name: 'Jammu & Kashmir' },
   { code: '02', name: 'Himachal Pradesh' },
@@ -68,3 +142,12 @@ export const INDIAN_STATES_LIST: IndianState[] = [
   { code: '38', name: 'Ladakh' },
   { code: '97', name: 'Other Territory' },
 ];
+
+export {
+  getTaxRegimeForCountry,
+  getTaxConfig,
+  EU_VAT_RATES,
+  US_STATE_SALES_TAX_RATES,
+  INDIA_GST_SLABS,
+} from '../utils/taxUtils';
+export type { TaxRegime, TaxConfig } from '../utils/taxUtils';

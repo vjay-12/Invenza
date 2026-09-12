@@ -30,7 +30,7 @@ import { PageMeta } from '../components/common/PageMeta';
 import { api } from '../services/api';
 
 export const Settings: React.FC = () => {
-  const { user, isSuperAdmin } = useAuth();
+  const { user, isSuperAdmin, taxConfig } = useAuth();
   const {
     customFields,
     addCustomField,
@@ -67,6 +67,7 @@ export const Settings: React.FC = () => {
   const [dangerError, setDangerError] = useState<string | null>(null);
   const [dangerSuccess, setDangerSuccess] = useState<string | null>(null);
   const [pendingPurgeRequest, setPendingPurgeRequest] = useState<any | null>(null);
+  const [rejectedPurgeRequest, setRejectedPurgeRequest] = useState<any | null>(null);
   const [isProcessingApproval, setIsProcessingApproval] = useState(false);
 
   // Countdown timer for OTP
@@ -83,10 +84,13 @@ export const Settings: React.FC = () => {
     try {
       const list = await api.getLedgerPurgeRequests();
       if (list && list.length > 0) {
-        const pending = list.find((r: any) => r.status === 'pending_super_admin_approval');
+        const pending = list.find((r: any) => r.status === 'pending_super_admin_approval' || r.status === 'pending');
         setPendingPurgeRequest(pending || null);
+        const rejected = list.find((r: any) => r.status === 'rejected');
+        setRejectedPurgeRequest(rejected || null);
       } else {
         setPendingPurgeRequest(null);
+        setRejectedPurgeRequest(null);
       }
     } catch (err) {
       console.warn('Could not load purge requests:', err);
@@ -203,14 +207,14 @@ export const Settings: React.FC = () => {
     }
   };
 
-  // GST & Invoicing Profile State
+  // Company Legal & Invoicing Profile State
   const [gstSettings, setGstSettings] = useState({
     legal_business_name: '',
     gstin: '',
     pan: '',
     registered_address: '',
-    state: 'Karnataka',
-    state_code: '29',
+    state: taxConfig.taxType === 'GST' ? 'Karnataka' : (taxConfig.stateName || taxConfig.countryName),
+    state_code: taxConfig.taxType === 'GST' ? '29' : (taxConfig.stateCode || taxConfig.countryCode),
     authorized_signatory_name: '',
     bank_name: '',
     bank_account_number: '',
@@ -233,15 +237,15 @@ export const Settings: React.FC = () => {
         if (data) {
           setGstSettings({
             legal_business_name: data.legal_business_name || '',
-            gstin: data.gstin || '',
-            pan: data.pan || '',
+            gstin: data.gstin || data.tax_id || '',
+            pan: data.pan || data.national_tax_id || '',
             registered_address: data.registered_address || '',
-            state: data.state || 'Karnataka',
-            state_code: data.state_code || '29',
+            state: data.state || (taxConfig.taxType === 'GST' ? 'Karnataka' : (taxConfig.stateName || taxConfig.countryName)),
+            state_code: data.state_code || (taxConfig.taxType === 'GST' ? '29' : (taxConfig.stateCode || taxConfig.countryCode)),
             authorized_signatory_name: data.authorized_signatory_name || '',
             bank_name: data.bank_name || '',
             bank_account_number: data.bank_account_number || '',
-            bank_ifsc_code: data.bank_ifsc_code || '',
+            bank_ifsc_code: data.bank_ifsc_code || data.bank_routing_code || '',
             bank_branch: data.bank_branch || '',
             account_holder_name: data.account_holder_name || '',
             invoice_prefix: data.invoice_prefix || 'INV',
@@ -251,13 +255,13 @@ export const Settings: React.FC = () => {
           });
         }
       } catch (err) {
-        console.error('Failed to load GST settings:', err);
+        console.error('Failed to load legal settings:', err);
       } finally {
         setIsLoadingGst(false);
       }
     };
     loadGstSettings();
-  }, []);
+  }, [taxConfig.taxType, taxConfig.stateName, taxConfig.countryName, taxConfig.stateCode, taxConfig.countryCode]);
 
   const handleSaveGstSettings = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -335,7 +339,7 @@ export const Settings: React.FC = () => {
         </p>
       </div>
 
-      {/* 1. Company GST & Invoicing Profile */}
+      {/* 1. Dynamic Company Legal & Invoicing Profile */}
       <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#131924] p-5 sm:p-6 shadow-card">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 dark:border-slate-800 pb-4">
           <div className="flex items-center gap-3">
@@ -344,10 +348,10 @@ export const Settings: React.FC = () => {
             </div>
             <div>
               <h2 className="text-sm font-bold text-slate-900 dark:text-white">
-                Company Legal Profile & GST Invoicing
+                {taxConfig.legalProfileTitle}
               </h2>
               <p className="text-xs text-slate-500 dark:text-slate-400">
-                Mandatory legal parameters, 15-digit GSTIN, state code, and bank remittance for tax-compliant invoices.
+                {taxConfig.legalProfileSubtitle}
               </p>
             </div>
           </div>
@@ -365,135 +369,311 @@ export const Settings: React.FC = () => {
           <div className="space-y-3">
             <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800/80 pb-2">
               <span className="text-[11px] font-bold uppercase tracking-wider text-teal-700 dark:text-teal-400 font-mono">
-                Enterprise Legal Identity & Tax Registration
+                {taxConfig.legalSectionTitle}
               </span>
               <span className="text-[10px] text-slate-400 dark:text-slate-500">
-                Required for GST e-Invoicing compliance
+                {taxConfig.legalComplianceHelper}
               </span>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-6 gap-4">
-              {/* Legal Business Name */}
-              <div className="md:col-span-4">
-                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
-                  Legal Business Name *
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={gstSettings.legal_business_name}
-                  onChange={(e) => setGstSettings({ ...gstSettings, legal_business_name: e.target.value })}
-                  placeholder="e.g. Invenza Global Technologies Ltd"
-                  className="w-full h-9 rounded-lg border border-slate-200 dark:border-slate-800 bg-[#F4F5F8] dark:bg-[#0C1017] px-3 py-2 text-xs text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-teal-600 transition-colors"
-                />
-              </div>
+            {taxConfig.taxType === 'GST' ? (
+              /* GST Legal Profile (India) */
+              <div className="grid grid-cols-1 md:grid-cols-6 gap-4">
+                {/* Legal Business Name */}
+                <div className="md:col-span-4">
+                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
+                    Legal Business Name *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={gstSettings.legal_business_name}
+                    onChange={(e) => setGstSettings({ ...gstSettings, legal_business_name: e.target.value })}
+                    placeholder="e.g. Invenza Global Technologies Ltd"
+                    className="w-full h-9 rounded-lg border border-slate-200 dark:border-slate-800 bg-[#F4F5F8] dark:bg-[#0C1017] px-3 py-2 text-xs text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-teal-600 transition-colors"
+                  />
+                </div>
 
-              {/* PAN */}
-              <div className="md:col-span-2">
-                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
-                  Permanent Account Number (PAN) *
-                </label>
-                <input
-                  type="text"
-                  required
-                  maxLength={10}
-                  value={gstSettings.pan}
-                  onChange={(e) => setGstSettings({ ...gstSettings, pan: e.target.value.toUpperCase() })}
-                  placeholder="AABCI1234F"
-                  className="w-full h-9 rounded-lg border border-slate-200 dark:border-slate-800 bg-[#F4F5F8] dark:bg-[#0C1017] px-3 py-2 text-xs font-mono uppercase text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-teal-600 transition-colors"
-                />
-              </div>
+                {/* PAN */}
+                <div className="md:col-span-2">
+                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
+                    Permanent Account Number (PAN) *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    maxLength={10}
+                    value={gstSettings.pan}
+                    onChange={(e) => setGstSettings({ ...gstSettings, pan: e.target.value.toUpperCase() })}
+                    placeholder="AABCI1234F"
+                    className="w-full h-9 rounded-lg border border-slate-200 dark:border-slate-800 bg-[#F4F5F8] dark:bg-[#0C1017] px-3 py-2 text-xs font-mono uppercase text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-teal-600 transition-colors"
+                  />
+                </div>
 
-              {/* Company GSTIN */}
-              <div className="md:col-span-3">
-                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
-                  Company GSTIN (15 Digits) *
-                </label>
-                <input
-                  type="text"
-                  required
-                  maxLength={15}
-                  value={gstSettings.gstin}
-                  onChange={(e) => {
-                    const val = e.target.value.toUpperCase();
-                    setGstSettings({
-                      ...gstSettings,
-                      gstin: val,
-                      state_code: val.length >= 2 ? val.slice(0, 2) : gstSettings.state_code,
-                    });
-                  }}
-                  placeholder="29AABCI1234F1Z5"
-                  className="w-full h-9 rounded-lg border border-slate-200 dark:border-slate-800 bg-[#F4F5F8] dark:bg-[#0C1017] px-3 py-2 text-xs font-mono uppercase text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-teal-600 transition-colors"
-                />
-              </div>
+                {/* Company GSTIN */}
+                <div className="md:col-span-3">
+                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
+                    Company GSTIN (15 Digits) *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    maxLength={15}
+                    value={gstSettings.gstin}
+                    onChange={(e) => {
+                      const val = e.target.value.toUpperCase();
+                      setGstSettings({
+                        ...gstSettings,
+                        gstin: val,
+                        state_code: val.length >= 2 ? val.slice(0, 2) : gstSettings.state_code,
+                      });
+                    }}
+                    placeholder="29AABCI1234F1Z5"
+                    className="w-full h-9 rounded-lg border border-slate-200 dark:border-slate-800 bg-[#F4F5F8] dark:bg-[#0C1017] px-3 py-2 text-xs font-mono uppercase text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-teal-600 transition-colors"
+                  />
+                </div>
 
-              {/* State & GST State Code */}
-              <div className="md:col-span-3">
-                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
-                  State & GST State Code *
-                </label>
-                <select
-                  value={gstSettings.state_code}
-                  onChange={(e) => {
-                    const sc = e.target.value;
-                    const stateMap: Record<string, string> = {
-                      '29': 'Karnataka',
-                      '33': 'Tamil Nadu',
-                      '27': 'Maharashtra',
-                      '07': 'Delhi',
-                      '36': 'Telangana',
-                      '24': 'Gujarat',
-                      '32': 'Kerala',
-                      '19': 'West Bengal',
-                    };
-                    setGstSettings({
-                      ...gstSettings,
-                      state_code: sc,
-                      state: stateMap[sc] || 'Karnataka',
-                    });
-                  }}
-                  className="w-full h-9 rounded-lg border border-slate-200 dark:border-slate-800 bg-[#F4F5F8] dark:bg-[#0C1017] px-3 py-2 text-xs font-mono text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-teal-600 transition-colors"
-                >
-                  <option value="29">29 - Karnataka</option>
-                  <option value="33">33 - Tamil Nadu</option>
-                  <option value="27">27 - Maharashtra</option>
-                  <option value="07">07 - Delhi</option>
-                  <option value="36">36 - Telangana</option>
-                  <option value="24">24 - Gujarat</option>
-                  <option value="32">32 - Kerala</option>
-                  <option value="19">19 - West Bengal</option>
-                </select>
-              </div>
+                {/* State & GST State Code */}
+                <div className="md:col-span-3">
+                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
+                    State & GST State Code *
+                  </label>
+                  <select
+                    value={gstSettings.state_code}
+                    onChange={(e) => {
+                      const sc = e.target.value;
+                      const stateMap: Record<string, string> = {
+                        '29': 'Karnataka',
+                        '33': 'Tamil Nadu',
+                        '27': 'Maharashtra',
+                        '07': 'Delhi',
+                        '36': 'Telangana',
+                        '24': 'Gujarat',
+                        '32': 'Kerala',
+                        '19': 'West Bengal',
+                      };
+                      setGstSettings({
+                        ...gstSettings,
+                        state_code: sc,
+                        state: stateMap[sc] || 'Karnataka',
+                      });
+                    }}
+                    className="w-full h-9 rounded-lg border border-slate-200 dark:border-slate-800 bg-[#F4F5F8] dark:bg-[#0C1017] px-3 py-2 text-xs font-mono text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-teal-600 transition-colors"
+                  >
+                    <option value="29">29 - Karnataka</option>
+                    <option value="33">33 - Tamil Nadu</option>
+                    <option value="27">27 - Maharashtra</option>
+                    <option value="07">07 - Delhi</option>
+                    <option value="36">36 - Telangana</option>
+                    <option value="24">24 - Gujarat</option>
+                    <option value="32">32 - Kerala</option>
+                    <option value="19">19 - West Bengal</option>
+                  </select>
+                </div>
 
-              {/* Registered Office Address */}
-              <div className="md:col-span-4">
-                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
-                  Registered Office Address *
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={gstSettings.registered_address}
-                  onChange={(e) => setGstSettings({ ...gstSettings, registered_address: e.target.value })}
-                  placeholder="Plot 42, Outer Ring Road, Bengaluru, Karnataka 560103"
-                  className="w-full h-9 rounded-lg border border-slate-200 dark:border-slate-800 bg-[#F4F5F8] dark:bg-[#0C1017] px-3 py-2 text-xs text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-teal-600 transition-colors"
-                />
-              </div>
+                {/* Registered Office Address */}
+                <div className="md:col-span-4">
+                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
+                    Registered Office Address *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={gstSettings.registered_address}
+                    onChange={(e) => setGstSettings({ ...gstSettings, registered_address: e.target.value })}
+                    placeholder="Plot 42, Outer Ring Road, Bengaluru, Karnataka 560103"
+                    className="w-full h-9 rounded-lg border border-slate-200 dark:border-slate-800 bg-[#F4F5F8] dark:bg-[#0C1017] px-3 py-2 text-xs text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-teal-600 transition-colors"
+                  />
+                </div>
 
-              {/* Authorized Signatory */}
-              <div className="md:col-span-2">
-                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
-                  Authorized Signatory *
-                </label>
-                <input
-                  type="text"
-                  value={gstSettings.authorized_signatory_name}
-                  onChange={(e) => setGstSettings({ ...gstSettings, authorized_signatory_name: e.target.value })}
-                  placeholder="e.g. Vijay B"
-                  className="w-full h-9 rounded-lg border border-slate-200 dark:border-slate-800 bg-[#F4F5F8] dark:bg-[#0C1017] px-3 py-2 text-xs text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-teal-600 transition-colors"
-                />
+                {/* Authorized Signatory */}
+                <div className="md:col-span-2">
+                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
+                    Authorized Signatory *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={gstSettings.authorized_signatory_name}
+                    onChange={(e) => setGstSettings({ ...gstSettings, authorized_signatory_name: e.target.value })}
+                    placeholder="e.g. Vijay B"
+                    className="w-full h-9 rounded-lg border border-slate-200 dark:border-slate-800 bg-[#F4F5F8] dark:bg-[#0C1017] px-3 py-2 text-xs text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-teal-600 transition-colors"
+                  />
+                </div>
               </div>
-            </div>
+            ) : taxConfig.taxType === 'VAT' ? (
+              /* EU / Germany VAT Legal Profile */
+              <div className="grid grid-cols-1 md:grid-cols-6 gap-4">
+                {/* Legal Business Name */}
+                <div className="md:col-span-3">
+                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
+                    Legal Business Name *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={gstSettings.legal_business_name}
+                    onChange={(e) => setGstSettings({ ...gstSettings, legal_business_name: e.target.value })}
+                    placeholder="e.g. SK E-Commerce GmbH"
+                    className="w-full h-9 rounded-lg border border-slate-200 dark:border-slate-800 bg-[#F4F5F8] dark:bg-[#0C1017] px-3 py-2 text-xs text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-teal-600 transition-colors"
+                  />
+                </div>
+
+                {/* Authorized Signatory */}
+                <div className="md:col-span-3">
+                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
+                    Authorized Signatory *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={gstSettings.authorized_signatory_name}
+                    onChange={(e) => setGstSettings({ ...gstSettings, authorized_signatory_name: e.target.value })}
+                    placeholder="e.g. Stefan Meier"
+                    className="w-full h-9 rounded-lg border border-slate-200 dark:border-slate-800 bg-[#F4F5F8] dark:bg-[#0C1017] px-3 py-2 text-xs text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-teal-600 transition-colors"
+                  />
+                </div>
+
+                {/* USt-IdNr. (VAT ID) */}
+                <div className="md:col-span-3">
+                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
+                    USt-IdNr. (VAT ID, format DE + 9 digits) *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    maxLength={15}
+                    value={gstSettings.gstin}
+                    onChange={(e) => setGstSettings({ ...gstSettings, gstin: e.target.value.toUpperCase().replace(/\s/g, '') })}
+                    placeholder="DE123456789"
+                    className="w-full h-9 rounded-lg border border-slate-200 dark:border-slate-800 bg-[#F4F5F8] dark:bg-[#0C1017] px-3 py-2 text-xs font-mono uppercase text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-teal-600 transition-colors"
+                  />
+                  <span className="text-[10px] text-slate-400 dark:text-slate-500 mt-1 block">
+                    Format: 2-letter country code + 9 digits
+                  </span>
+                </div>
+
+                {/* Steuernummer (Tax Number) */}
+                <div className="md:col-span-3">
+                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
+                    Steuernummer (Domestic Tax Number) *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    maxLength={20}
+                    value={gstSettings.pan}
+                    onChange={(e) => setGstSettings({ ...gstSettings, pan: e.target.value })}
+                    placeholder="e.g. 12/345/67890"
+                    className="w-full h-9 rounded-lg border border-slate-200 dark:border-slate-800 bg-[#F4F5F8] dark:bg-[#0C1017] px-3 py-2 text-xs font-mono text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-teal-600 transition-colors"
+                  />
+                  <span className="text-[10px] text-slate-400 dark:text-slate-500 mt-1 block">
+                    Issued by domestic Finanzamt
+                  </span>
+                </div>
+
+                {/* Registered Business Address */}
+                <div className="md:col-span-6">
+                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
+                    Registered Business Address *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={gstSettings.registered_address}
+                    onChange={(e) => setGstSettings({ ...gstSettings, registered_address: e.target.value })}
+                    placeholder="e.g. Friedrichstraße 43, 10117 Berlin, Germany"
+                    className="w-full h-9 rounded-lg border border-slate-200 dark:border-slate-800 bg-[#F4F5F8] dark:bg-[#0C1017] px-3 py-2 text-xs text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-teal-600 transition-colors"
+                  />
+                </div>
+              </div>
+            ) : (
+              /* US Sales Tax Legal Profile */
+              <div className="grid grid-cols-1 md:grid-cols-6 gap-4">
+                {/* Legal Business Name */}
+                <div className="md:col-span-3">
+                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
+                    Legal Business Name *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={gstSettings.legal_business_name}
+                    onChange={(e) => setGstSettings({ ...gstSettings, legal_business_name: e.target.value })}
+                    placeholder="e.g. Pacific Crest Distribution Inc."
+                    className="w-full h-9 rounded-lg border border-slate-200 dark:border-slate-800 bg-[#F4F5F8] dark:bg-[#0C1017] px-3 py-2 text-xs text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-teal-600 transition-colors"
+                  />
+                </div>
+
+                {/* Authorized Signatory */}
+                <div className="md:col-span-3">
+                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
+                    Authorized Signatory *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={gstSettings.authorized_signatory_name}
+                    onChange={(e) => setGstSettings({ ...gstSettings, authorized_signatory_name: e.target.value })}
+                    placeholder="e.g. Michael Vance"
+                    className="w-full h-9 rounded-lg border border-slate-200 dark:border-slate-800 bg-[#F4F5F8] dark:bg-[#0C1017] px-3 py-2 text-xs text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-teal-600 transition-colors"
+                  />
+                </div>
+
+                {/* EIN */}
+                <div className="md:col-span-3">
+                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
+                    Employer Identification Number (EIN) *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    maxLength={15}
+                    value={gstSettings.pan}
+                    onChange={(e) => setGstSettings({ ...gstSettings, pan: e.target.value })}
+                    placeholder="e.g. 12-3456789"
+                    className="w-full h-9 rounded-lg border border-slate-200 dark:border-slate-800 bg-[#F4F5F8] dark:bg-[#0C1017] px-3 py-2 text-xs font-mono text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-teal-600 transition-colors"
+                  />
+                  <span className="text-[10px] text-slate-400 dark:text-slate-500 mt-1 block">
+                    Federal 9-digit Tax ID (XX-XXXXXXX)
+                  </span>
+                </div>
+
+                {/* State Sales Tax Permit # */}
+                <div className="md:col-span-3">
+                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
+                    State Sales Tax Permit / Registration # *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    maxLength={25}
+                    value={gstSettings.gstin}
+                    onChange={(e) => setGstSettings({ ...gstSettings, gstin: e.target.value.toUpperCase() })}
+                    placeholder="e.g. SR AC 12-345678"
+                    className="w-full h-9 rounded-lg border border-slate-200 dark:border-slate-800 bg-[#F4F5F8] dark:bg-[#0C1017] px-3 py-2 text-xs font-mono uppercase text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-teal-600 transition-colors"
+                  />
+                  <span className="text-[10px] text-slate-400 dark:text-slate-500 mt-1 block">
+                    State Department of Revenue Permit
+                  </span>
+                </div>
+
+                {/* Registered Business Address */}
+                <div className="md:col-span-6">
+                  <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
+                    Registered Business Address *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={gstSettings.registered_address}
+                    onChange={(e) => setGstSettings({ ...gstSettings, registered_address: e.target.value })}
+                    placeholder="e.g. 500 Howard Street, Suite 400, San Francisco, CA 94105"
+                    className="w-full h-9 rounded-lg border border-slate-200 dark:border-slate-800 bg-[#F4F5F8] dark:bg-[#0C1017] px-3 py-2 text-xs text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-teal-600 transition-colors"
+                  />
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Sub-block 2: Bank Remittance Details (Printed on Invoices) */}
@@ -503,7 +683,7 @@ export const Settings: React.FC = () => {
                 Bank Remittance Details (Printed on Invoices)
               </span>
               <span className="text-[10px] text-slate-400 dark:text-slate-500">
-                Direct wire instructions displayed on customer invoices
+                Direct wire / electronic instructions displayed on customer invoices
               </span>
             </div>
 
@@ -533,38 +713,39 @@ export const Settings: React.FC = () => {
                   required
                   value={gstSettings.bank_name}
                   onChange={(e) => setGstSettings({ ...gstSettings, bank_name: e.target.value })}
-                  placeholder="e.g. HDFC Bank"
+                  placeholder={taxConfig.taxType === 'VAT' ? 'e.g. Deutsche Bank' : taxConfig.taxType === 'SALES_TAX' ? 'e.g. JPMorgan Chase' : 'e.g. HDFC Bank'}
                   className="w-full h-9 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#131924] px-3 py-2 text-xs text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-teal-600 transition-colors"
                 />
               </div>
 
-              {/* Bank Account Number */}
+              {/* Bank Account / IBAN */}
               <div className="md:col-span-3">
                 <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1">
-                  Bank Account Number *
+                  {taxConfig.bankAccountLabel}
                 </label>
                 <input
                   type="text"
                   required
+                  maxLength={34}
                   value={gstSettings.bank_account_number}
-                  onChange={(e) => setGstSettings({ ...gstSettings, bank_account_number: e.target.value })}
-                  placeholder="50200012345678"
-                  className="w-full h-9 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#131924] px-3 py-2 text-xs font-mono text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-teal-600 transition-colors"
+                  onChange={(e) => setGstSettings({ ...gstSettings, bank_account_number: e.target.value.toUpperCase() })}
+                  placeholder={taxConfig.bankAccountPlaceholder}
+                  className="w-full h-9 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#131924] px-3 py-2 text-xs font-mono uppercase text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-teal-600 transition-colors"
                 />
               </div>
 
-              {/* IFSC Code */}
+              {/* Routing / BIC / IFSC */}
               <div className="md:col-span-3">
                 <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1">
-                  IFSC Code *
+                  {taxConfig.bankRoutingLabel}
                 </label>
                 <input
                   type="text"
                   required
-                  maxLength={11}
+                  maxLength={15}
                   value={gstSettings.bank_ifsc_code}
                   onChange={(e) => setGstSettings({ ...gstSettings, bank_ifsc_code: e.target.value.toUpperCase() })}
-                  placeholder="HDFC0001234"
+                  placeholder={taxConfig.bankRoutingPlaceholder}
                   className="w-full h-9 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#131924] px-3 py-2 text-xs font-mono uppercase text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-teal-600 transition-colors"
                 />
               </div>
@@ -572,13 +753,13 @@ export const Settings: React.FC = () => {
               {/* Branch Name */}
               <div className="md:col-span-6">
                 <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1">
-                  Bank Branch Name & City
+                  {taxConfig.bankBranchLabel}
                 </label>
                 <input
                   type="text"
                   value={gstSettings.bank_branch}
                   onChange={(e) => setGstSettings({ ...gstSettings, bank_branch: e.target.value })}
-                  placeholder="e.g. Koramangala 5th Block, Bengaluru, KA - 560034"
+                  placeholder={taxConfig.taxType === 'VAT' ? 'e.g. Frankfurt Main Branch, Germany' : taxConfig.taxType === 'SALES_TAX' ? 'e.g. San Francisco Financial District' : 'e.g. Koramangala 5th Block, Bengaluru, KA - 560034'}
                   className="w-full h-9 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#131924] px-3 py-2 text-xs text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-teal-600 transition-colors"
                 />
               </div>
@@ -621,7 +802,7 @@ export const Settings: React.FC = () => {
           {/* Form Action Footer */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pt-4 border-t border-slate-100 dark:border-slate-800">
             <p className="text-[11px] text-slate-500 dark:text-slate-400">
-              Parameters are bound automatically to all computer-generated Tax Invoices, Delivery Challans, and E-Way bills.
+              {taxConfig.legalFooterText}
             </p>
             <button
               type="submit"
@@ -629,7 +810,7 @@ export const Settings: React.FC = () => {
               className="flex items-center justify-center gap-2 rounded-lg bg-teal-700 hover:bg-teal-800 px-5 py-2 h-9 text-xs font-bold text-white shadow-subtle transition-colors shrink-0"
             >
               <IconCheck className="h-4 w-4" />
-              <span>{isSavingGst ? 'Saving Profile...' : 'Save GST Settings'}</span>
+              <span>{isSavingGst ? 'Saving Profile...' : taxConfig.saveSettingsButtonText}</span>
             </button>
           </div>
         </form>
@@ -1053,7 +1234,7 @@ export const Settings: React.FC = () => {
             </div>
 
             {/* If there is a pending purge request */}
-            {pendingPurgeRequest && pendingPurgeRequest.status === 'pending_super_admin_approval' ? (
+            {pendingPurgeRequest && (pendingPurgeRequest.status === 'pending_super_admin_approval' || pendingPurgeRequest.status === 'pending') ? (
               <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-900 dark:text-amber-300 text-xs space-y-2">
                 <div className="flex items-center justify-between font-bold">
                   <span className="flex items-center gap-1.5">
@@ -1080,20 +1261,38 @@ export const Settings: React.FC = () => {
                 )}
               </div>
             ) : (
-              <button
-                type="button"
-                disabled={ledger.length === 0}
-                onClick={() => openDangerModal('ledger')}
-                className={`w-full py-1.5 px-3 rounded-lg text-xs font-bold transition-colors flex items-center justify-center gap-2 ${
-                  ledger.length === 0
-                    ? 'bg-slate-100 dark:bg-slate-800 text-slate-400 cursor-not-allowed'
-                    : 'bg-rose-700 hover:bg-rose-800 text-white shadow-subtle'
-                }`}
-              >
-                <IconShieldCheck className="h-3.5 w-3.5" />
-                <IconTrash2 className="h-3.5 w-3.5" />
-                Clear Movement Ledger
-              </button>
+              <div className="space-y-2">
+                {rejectedPurgeRequest && (
+                  <div className="p-2.5 rounded-lg bg-rose-500/10 border border-rose-500/25 text-rose-800 dark:text-rose-300 text-xs space-y-1">
+                    <div className="flex items-center justify-between font-bold">
+                      <span className="flex items-center gap-1.5 text-rose-600 dark:text-rose-400">
+                        <IconAlertTriangle className="h-3.5 w-3.5" />
+                        Previous Purge Request Rejected
+                      </span>
+                      <span className="font-mono text-[10px] px-1.5 py-0.5 rounded bg-rose-500/20 text-rose-700 dark:text-rose-300 font-bold">
+                        {rejectedPurgeRequest.id}
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-slate-600 dark:text-slate-400">
+                      Reason: <strong>{rejectedPurgeRequest.rejection_reason || 'Rejected by Super Administrator'}</strong>
+                    </p>
+                  </div>
+                )}
+                <button
+                  type="button"
+                  disabled={ledger.length === 0}
+                  onClick={() => openDangerModal('ledger')}
+                  className={`w-full py-1.5 px-3 rounded-lg text-xs font-bold transition-colors flex items-center justify-center gap-2 ${
+                    ledger.length === 0
+                      ? 'bg-slate-100 dark:bg-slate-800 text-slate-400 cursor-not-allowed'
+                      : 'bg-rose-700 hover:bg-rose-800 text-white shadow-subtle'
+                  }`}
+                >
+                  <IconShieldCheck className="h-3.5 w-3.5" />
+                  <IconTrash2 className="h-3.5 w-3.5" />
+                  Clear Movement Ledger
+                </button>
+              </div>
             )}
           </div>
         </div>

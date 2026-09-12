@@ -108,7 +108,7 @@ export const Ledger: React.FC = () => {
             onClick={exportLedgerCSV}
             className="flex items-center gap-2 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-[#131924] hover:bg-slate-50 dark:hover:bg-slate-800 px-3.5 py-2 text-xs font-bold text-slate-700 dark:text-slate-200 transition-colors shadow-subtle"
           >
-            <IconDownload className="h-4 w-4 text-slate-400" />
+            <IconDownload className="h-4 w-4 text-slate-500 dark:text-slate-400" />
             Export Ledger Audit (CSV)
           </button>
         </div>
@@ -242,7 +242,7 @@ export const Ledger: React.FC = () => {
                     >
                       <td className="py-2.5 px-4 font-mono text-[11px] text-slate-500 dark:text-slate-400 whitespace-nowrap">
                         <div>{dateStr}</div>
-                        <div className="text-[10px] text-slate-400">{timeStr}</div>
+                        <div className="text-[10px] text-slate-500">{timeStr}</div>
                       </td>
                       <td className="py-2.5 px-3">
                         <MovementBadge type={displayMvType} />
@@ -287,7 +287,7 @@ export const Ledger: React.FC = () => {
                         {m.reasonCode ? (
                           <ReasonBadge reason={m.reasonCode} />
                         ) : (
-                          <span className="text-slate-400 text-[11px]">Automatic Ledger Sync</span>
+                          <span className="text-slate-500 dark:text-slate-400 text-[11px]">Automatic Ledger Sync</span>
                         )}
                       </td>
                       <td className="py-2.5 px-4 text-slate-500 dark:text-slate-400 text-[11px]">

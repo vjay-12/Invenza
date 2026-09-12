@@ -101,7 +101,7 @@ export const QuickSearchModal: React.FC<QuickSearchModalProps> = ({
                       <div className="text-xs font-bold text-slate-800 dark:text-slate-200 group-hover:text-teal-700 dark:group-hover:text-teal-400">
                         {p.name}
                       </div>
-                      <div className="text-[11px] text-slate-400 font-mono">
+                      <div className="text-[11px] text-slate-500 dark:text-slate-400 font-mono">
                         {p.sku} : Stock: {p.currentStock} {p.unitOfMeasure}
                       </div>
                     </div>

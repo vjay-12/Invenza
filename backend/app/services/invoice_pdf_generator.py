@@ -70,7 +70,7 @@ class NumberedCanvas(canvas.Canvas):
         self.setFillColor(SLATE_MUTED)
         page_str = f"Page {self._pageNumber} of {page_count}"
         self.drawRightString(A4[0] - 36, 20, page_str)
-        self.drawString(36, 20, "Invenza Enterprise IMS — Cryptographically Audited GST Tax Invoice")
+        self.drawString(36, 20, "Invenza Enterprise IMS — Audited Tax Invoice")
         self.restoreState()
 
 class InvoicePdfGenerator:
@@ -194,6 +194,12 @@ class InvoicePdfGenerator:
         elements = []
 
         # --- 1. HEADER SECTION (Logo/Company Info on Left, TAX INVOICE & Meta on Right) ---
+        tax_type = invoice_data.get("tax_type", "GST")
+        currency_symbol = invoice_data.get("currency_symbol") or {"INR": "₹", "EUR": "€", "USD": "$"}.get(invoice_data.get("currency_code", "INR"), "₹")
+        tax_label = invoice_data.get("tax_label") or {"GST": "GST", "VAT": "VAT", "SALES_TAX": "Sales Tax"}.get(tax_type, "Tax")
+        tax_rate = invoice_data.get("tax_rate")
+        region_disp = invoice_data.get("region_display") or invoice_data.get("place_of_supply", "")
+
         seller_name = invoice_data.get("seller_legal_name", "Invenza Enterprise Ltd")
         seller_addr = invoice_data.get("seller_address", "Outer Ring Road, Bengaluru, Karnataka 560103")
         seller_gstin = invoice_data.get("seller_gstin", "29AABCI1234F1Z5")
@@ -201,28 +207,65 @@ class InvoicePdfGenerator:
         seller_state = invoice_data.get("seller_state", "Karnataka")
         seller_state_code = invoice_data.get("seller_state_code", "29")
 
+        if tax_type == "GST":
+            left_company_info = [
+                Paragraph(seller_name, company_name_style),
+                Paragraph(seller_addr, body_muted),
+                Paragraph(f"<b>GSTIN:</b> {seller_gstin} &nbsp;&nbsp; <b>PAN:</b> {seller_pan}", body_muted),
+                Paragraph(f"<b>State:</b> {seller_state} (Code: {seller_state_code})", body_muted),
+            ]
+        elif tax_type == "VAT":
+            regime_line = str(region_disp)
+            if tax_rate is not None:
+                regime_line += f" — {tax_label} {float(tax_rate):g}%"
+            vat_items = []
+            if seller_gstin:
+                vat_items.append(f"<b>USt-IdNr.:</b> {seller_gstin}")
+            if seller_pan:
+                vat_items.append(f"<b>Steuernummer:</b> {seller_pan}")
+            left_company_info = [
+                Paragraph(seller_name, company_name_style),
+                Paragraph(seller_addr, body_muted),
+            ]
+            if vat_items:
+                left_company_info.append(Paragraph(" &nbsp;&nbsp; ".join(vat_items), body_muted))
+            left_company_info.append(Paragraph(f"<b>Tax Region:</b> {regime_line}", body_muted))
+        else:
+            regime_line = str(region_disp)
+            if tax_rate is not None:
+                regime_line += f" — {tax_label} {float(tax_rate):g}%"
+                if tax_type == "SALES_TAX" and float(tax_rate) == 0:
+                    regime_line += " (No state sales tax)"
+            tax_items = []
+            if seller_pan:
+                tax_items.append(f"<b>EIN:</b> {seller_pan}")
+            if seller_gstin:
+                tax_items.append(f"<b>Tax Permit:</b> {seller_gstin}")
+            left_company_info = [
+                Paragraph(seller_name, company_name_style),
+                Paragraph(seller_addr, body_muted),
+            ]
+            if tax_items:
+                left_company_info.append(Paragraph(" &nbsp;&nbsp; ".join(tax_items), body_muted))
+            left_company_info.append(Paragraph(f"<b>Tax Region:</b> {regime_line}", body_muted))
+
         inv_number = invoice_data.get("invoice_number", "INV/2026-27/00001")
         inv_date = invoice_data.get("invoice_date", "")[:10] if invoice_data.get("invoice_date") else ""
         due_date = invoice_data.get("due_date", "")[:10] if invoice_data.get("due_date") else inv_date
         place_of_supply = invoice_data.get("place_of_supply", f"{seller_state_code}-{seller_state}")
         so_number = invoice_data.get("so_number") or invoice_data.get("reference_number", "N/A")
 
-        left_company_info = [
-            Paragraph(seller_name, company_name_style),
-            Paragraph(seller_addr, body_muted),
-            Paragraph(f"<b>GSTIN:</b> {seller_gstin} &nbsp;&nbsp; <b>PAN:</b> {seller_pan}", body_muted),
-            Paragraph(f"<b>State:</b> {seller_state} (Code: {seller_state_code})", body_muted),
-        ]
-
         doc_title = invoice_data.get("document_title", "TAX INVOICE")
         num_label = invoice_data.get("number_label", "Invoice No")
         date_label = invoice_data.get("date_label", "Invoice Date")
 
+        region_meta_label = "Place of Supply" if tax_type == "GST" else "Tax Region"
+        region_meta_value = place_of_supply if tax_type == "GST" else region_disp
         right_meta_info = [
             Paragraph(doc_title, title_style),
             Paragraph(f"{num_label}: <b>{inv_number}</b>", inv_num_style),
             Paragraph(f"{date_label}: {inv_date}", meta_right),
-            Paragraph(f"Place of Supply: <b>{place_of_supply}</b>", meta_right),
+            Paragraph(f"{region_meta_label}: <b>{region_meta_value}</b>", meta_right),
             Paragraph(f"Ref Sales Order: {so_number}", meta_right),
             Paragraph(f"Payment Terms: {invoice_data.get('payment_terms', 'Due on Receipt')}", meta_right),
         ]
@@ -249,14 +292,23 @@ class InvoicePdfGenerator:
         cust_state = invoice_data.get("customer_state", "Karnataka")
         cust_code = invoice_data.get("customer_state_code", "29")
 
-        bill_to_content = [
-            Paragraph("BILL TO (BUYER DETAILS)", section_heading),
-            Spacer(1, 2),
-            Paragraph(cust_name, body_bold),
-            Paragraph(cust_billing, body_muted),
-            Paragraph(f"<b>GSTIN:</b> {cust_gstin}", body_muted),
-            Paragraph(f"<b>State:</b> {cust_state} (Code: {cust_code})", body_muted),
-        ]
+        if tax_type == "GST":
+            bill_to_content = [
+                Paragraph("BILL TO (BUYER DETAILS)", section_heading),
+                Spacer(1, 2),
+                Paragraph(cust_name, body_bold),
+                Paragraph(cust_billing, body_muted),
+                Paragraph(f"<b>GSTIN:</b> {cust_gstin}", body_muted),
+                Paragraph(f"<b>State:</b> {cust_state} (Code: {cust_code})", body_muted),
+            ]
+        else:
+            bill_to_content = [
+                Paragraph("BILL TO (BUYER DETAILS)", section_heading),
+                Spacer(1, 2),
+                Paragraph(cust_name, body_bold),
+                Paragraph(cust_billing, body_muted),
+                Paragraph(f"<b>Tax Region:</b> {cust_state} ({cust_code})", body_muted),
+            ]
 
         ship_to_content = [
             Paragraph("SHIP TO (DISPATCH DESTINATION)", section_heading),
@@ -283,11 +335,27 @@ class InvoicePdfGenerator:
         elements.append(parties_table)
         elements.append(Spacer(1, 12))
 
-        # --- 3. LINE ITEMS TABLE WITH GST SPLIT ---
+        # --- 3. LINE ITEMS TABLE WITH TAX SPLIT (GST inter/intra | VAT | Sales Tax) ---
         is_inter_state = invoice_data.get("is_inter_state", False)
         items = invoice_data.get("items", [])
+        single_tax_total = float(invoice_data.get("total_single_tax", 0))
+        zero_rate = tax_type == "SALES_TAX" and tax_rate is not None and float(tax_rate) == 0
 
-        if is_inter_state:
+        if tax_type != "GST":
+            # EU VAT / US Sales Tax: single tax column, no CGST/SGST-style split
+            headers = [
+                Paragraph("#", table_header),
+                Paragraph("Item Description", table_header),
+                Paragraph("HSN/SAC" if any((it.get("hsn_code") or "").strip() for it in items) else "Ref", table_header),
+                Paragraph("Qty", table_header),
+                Paragraph(f"Rate ({currency_symbol})", table_header),
+                Paragraph("Taxable", table_header),
+                Paragraph(f"{tax_label} %", table_header),
+                Paragraph(f"{tax_label} Amt", table_header),
+                Paragraph(f"Total ({currency_symbol})", table_header),
+            ]
+            col_widths = [22, 160, 48, 38, 48, 56, 42, 52, 56]
+        elif is_inter_state:
             # S.No (20), Description (152), HSN (45), Qty (35), Unit (30), Rate (45), Taxable (55), IGST Rate (35), IGST Amt (50), Total (55) = 522
             headers = [
                 Paragraph("#", table_header),
@@ -298,7 +366,7 @@ class InvoicePdfGenerator:
                 Paragraph("Taxable Val", table_header),
                 Paragraph("IGST %", table_header),
                 Paragraph("IGST Amt", table_header),
-                Paragraph("Total (₹)", table_header),
+                Paragraph(f"Total ({currency_symbol})", table_header),
             ]
             col_widths = [22, 160, 48, 38, 48, 56, 42, 52, 56]
         else:
@@ -312,7 +380,7 @@ class InvoicePdfGenerator:
                 Paragraph("Taxable", table_header),
                 Paragraph("CGST", table_header),
                 Paragraph("SGST", table_header),
-                Paragraph("Total (₹)", table_header),
+                Paragraph(f"Total ({currency_symbol})", table_header),
             ]
             col_widths = [22, 160, 48, 38, 48, 56, 47, 47, 56]
 
@@ -320,15 +388,32 @@ class InvoicePdfGenerator:
 
         for idx, it in enumerate(items, 1):
             desc = it.get("item_description", "Item")
-            hsn = it.get("hsn_code", "8471")
+            hsn = (it.get("hsn_code") or "—").strip() or "—"
             qty = f"{it.get('quantity', 1):.0f}"
-            rate = f"₹{it.get('unit_price', 0):.2f}"
-            taxable = f"₹{it.get('taxable_value', 0):.2f}"
-            total = f"₹{it.get('total', 0):.2f}"
+            rate = f"{currency_symbol}{it.get('unit_price', 0):.2f}"
+            taxable = f"{currency_symbol}{it.get('taxable_value', 0):.2f}"
+            total = f"{currency_symbol}{it.get('total', 0):.2f}"
 
-            if is_inter_state:
+            if tax_type != "GST":
+                st_r = f"{float(it.get('single_tax_rate', 0)):g}%"
+                if zero_rate:
+                    st_str = "0%<br/>No state sales tax"
+                else:
+                    st_str = f"{st_r}<br/>{currency_symbol}{it.get('single_tax_amount', 0):.2f}"
+                row = [
+                    Paragraph(str(idx), table_cell_num),
+                    Paragraph(desc, table_cell),
+                    Paragraph(hsn, table_cell),
+                    Paragraph(qty, table_cell_num),
+                    Paragraph(rate, table_cell_num),
+                    Paragraph(taxable, table_cell_num),
+                    Paragraph(st_str, table_cell_num),
+                    Paragraph("", table_cell_num),
+                    Paragraph(total, table_cell_bold),
+                ]
+            elif is_inter_state:
                 igst_r = f"{float(it.get('igst_rate', 0)):g}%"
-                igst_a = f"₹{it.get('igst_amount', 0):.2f}"
+                igst_a = f"{currency_symbol}{it.get('igst_amount', 0):.2f}"
                 row = [
                     Paragraph(str(idx), table_cell_num),
                     Paragraph(desc, table_cell),
@@ -343,8 +428,8 @@ class InvoicePdfGenerator:
             else:
                 cgst_r = f"{float(it.get('cgst_rate', 0)):g}%"
                 sgst_r = f"{float(it.get('sgst_rate', 0)):g}%"
-                cgst_str = f"{cgst_r}<br/>₹{it.get('cgst_amount', 0):.2f}"
-                sgst_str = f"{sgst_r}<br/>₹{it.get('sgst_amount', 0):.2f}"
+                cgst_str = f"{cgst_r}<br/>{currency_symbol}{it.get('cgst_amount', 0):.2f}"
+                sgst_str = f"{sgst_r}<br/>{currency_symbol}{it.get('sgst_amount', 0):.2f}"
                 row = [
                     Paragraph(str(idx), table_cell_num),
                     Paragraph(desc, table_cell),
@@ -388,30 +473,66 @@ class InvoicePdfGenerator:
             Paragraph("Total Amount in Words:", section_heading),
             Spacer(1, 2),
             Paragraph(f"<b>{grand_words}</b>", body_bold),
-            Spacer(1, 8),
-            Paragraph("<b>Bank Remittance Details:</b>", section_heading),
-            Paragraph(f"Bank Name: <b>{invoice_data.get('bank_name', 'HDFC Bank')}</b>", body_muted),
-            Paragraph(f"A/C Number: <b>{invoice_data.get('bank_account_number', '50200012345678')}</b>", body_muted),
-            Paragraph(f"IFSC Code: <b>{invoice_data.get('bank_ifsc_code', 'HDFC0001234')}</b>", body_muted),
-            Paragraph(f"Branch: {invoice_data.get('bank_branch', 'Koramangala 5th Block, Bengaluru')}", body_muted),
-            Paragraph(f"Beneficiary: {invoice_data.get('account_holder_name', seller_name)}", body_muted),
         ]
+        bank_name = invoice_data.get("bank_name")
+        if bank_name:
+            words_box += [
+                Spacer(1, 8),
+                Paragraph("<b>Bank Remittance Details:</b>", section_heading),
+                Paragraph(f"Bank Name: <b>{bank_name}</b>", body_muted),
+            ]
+            acct_num = invoice_data.get("bank_account_number")
+            routing_code = invoice_data.get("bank_ifsc_code")
+            branch = invoice_data.get("bank_branch")
+
+            if tax_type == "VAT":
+                if acct_num:
+                    words_box.append(Paragraph(f"IBAN: <b>{acct_num}</b>", body_muted))
+                if routing_code:
+                    words_box.append(Paragraph(f"BIC / SWIFT: <b>{routing_code}</b>", body_muted))
+                if branch:
+                    words_box.append(Paragraph(f"Branch: {branch}", body_muted))
+            elif tax_type == "SALES_TAX":
+                if acct_num:
+                    words_box.append(Paragraph(f"Account Number: <b>{acct_num}</b>", body_muted))
+                if routing_code:
+                    words_box.append(Paragraph(f"Routing (ABA): <b>{routing_code}</b>", body_muted))
+                if branch:
+                    words_box.append(Paragraph(f"Branch: {branch}", body_muted))
+            else:
+                if acct_num:
+                    words_box.append(Paragraph(f"A/C Number: <b>{acct_num}</b>", body_muted))
+                if routing_code:
+                    words_box.append(Paragraph(f"IFSC Code: <b>{routing_code}</b>", body_muted))
+                if branch:
+                    words_box.append(Paragraph(f"Branch: {branch}", body_muted))
+
+            words_box.append(Paragraph(f"Beneficiary: {invoice_data.get('account_holder_name', seller_name)}", body_muted))
 
         totals_rows = [
-            [Paragraph("Taxable Amount:", body_muted), Paragraph(f"₹{taxable_total:,.2f}", table_cell_num)],
+            [Paragraph("Taxable Amount:", body_muted), Paragraph(f"{currency_symbol}{taxable_total:,.2f}", table_cell_num)],
         ]
-        if is_inter_state:
-            totals_rows.append([Paragraph("Total IGST:", body_muted), Paragraph(f"₹{igst_total:,.2f}", table_cell_num)])
+        if tax_type == "GST":
+            if is_inter_state:
+                totals_rows.append([Paragraph("Total IGST:", body_muted), Paragraph(f"{currency_symbol}{igst_total:,.2f}", table_cell_num)])
+            else:
+                totals_rows.append([Paragraph("Total CGST:", body_muted), Paragraph(f"{currency_symbol}{cgst_total:,.2f}", table_cell_num)])
+                totals_rows.append([Paragraph("Total SGST:", body_muted), Paragraph(f"{currency_symbol}{sgst_total:,.2f}", table_cell_num)])
         else:
-            totals_rows.append([Paragraph("Total CGST:", body_muted), Paragraph(f"₹{cgst_total:,.2f}", table_cell_num)])
-            totals_rows.append([Paragraph("Total SGST:", body_muted), Paragraph(f"₹{sgst_total:,.2f}", table_cell_num)])
+            if zero_rate:
+                tax_row_label = f"Total {tax_label} (0% — No state sales tax):"
+            elif tax_rate is not None:
+                tax_row_label = f"Total {tax_label} ({float(tax_rate):g}%):"
+            else:
+                tax_row_label = f"Total {tax_label}:"
+            totals_rows.append([Paragraph(tax_row_label, body_muted), Paragraph(f"{currency_symbol}{single_tax_total:,.2f}", table_cell_num)])
 
         if round_off != 0.0:
             totals_rows.append([Paragraph("Round Off:", body_muted), Paragraph(f"{round_off:+0.2f}", table_cell_num)])
 
         totals_rows.append([
             Paragraph("<b>Grand Total:</b>", ParagraphStyle("GTLabel", parent=body_bold, textColor=TEAL_DARK, fontSize=9)),
-            Paragraph(f"<b>₹{grand_total:,.2f}</b>", ParagraphStyle("GTVal", parent=table_cell_bold, textColor=TEAL_PRIMARY, fontSize=10)),
+            Paragraph(f"<b>{currency_symbol}{grand_total:,.2f}</b>", ParagraphStyle("GTVal", parent=table_cell_bold, textColor=TEAL_PRIMARY, fontSize=10)),
         ])
 
         totals_table = Table(totals_rows, colWidths=[110, 100])
